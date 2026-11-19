@@ -5,8 +5,9 @@ Atari's 1980 *Battlezone*. You command a 1940 U-boat: you see the sea through th
 periscope, find the enemy with the sonar, and read the state of the boat from dials,
 gauges and lamps.
 
-Open `uboot-zone.html` in a browser and play. Everything runs locally; nothing is
-downloaded and nothing is uploaded.
+**[▶ Play it online](https://droogia.github.io/uboot-zone/)**, or open `uboot-zone.html`
+in a browser and play. Everything runs locally; nothing is downloaded and nothing is
+uploaded.
 
 The **[Commander's Manual](MANUAL.md)** explains every instrument, the game dynamics and the
 tactics, with screenshots and diagrams.

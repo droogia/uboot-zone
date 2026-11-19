@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 640" width="860" height="640" font-family="Courier New, monospace" font-weight="bold">
+  <!-- depth scale: y = 50 + depth * 1.9 (0 m at y 50, 300 m at y 620) -->
+  <rect width="860" height="640" fill="#000"/>
+  <text x="20" y="30" fill="#39ff14" font-size="18">DEPTHS THAT MATTER</text>
+
+  <!-- water -->
+  <rect x="80" y="50" width="760" height="570" fill="#00142a"/>
+  <line x1="80" y1="50" x2="840" y2="50" stroke="#3aa8ff" stroke-width="2"/>
+
+  <!-- scale -->
+  <g fill="#39ff14" font-size="12" text-anchor="end">
+    <text x="70" y="54">0</text>
+    <text x="70" y="149">50</text>
+    <text x="70" y="244">100</text>
+    <text x="70" y="339">150</text>
+    <text x="70" y="434">200</text>
+    <text x="70" y="529">250</text>
+    <text x="70" y="624">300 M</text>
+  </g>
+  <g stroke="#39ff14" stroke-width="1">
+    <line x1="74" y1="50" x2="80" y2="50"/><line x1="74" y1="145" x2="80" y2="145"/>
+    <line x1="74" y1="240" x2="80" y2="240"/><line x1="74" y1="335" x2="80" y2="335"/>
+    <line x1="74" y1="430" x2="80" y2="430"/><line x1="74" y1="525" x2="80" y2="525"/>
+    <line x1="74" y1="620" x2="80" y2="620"/>
+  </g>
+
+  <!-- bars, one column each -->
+  <!-- periscope works 0 - 16.5 m -->
+  <rect x="100" y="50" width="22" height="31" fill="#39ff14" opacity="0.8"/>
+  <!-- tubes 0 - 25 m -->
+  <rect x="130" y="50" width="22" height="48" fill="#39ff14" opacity="0.45"/>
+  <!-- enemy torpedoes 0 - 18 m -->
+  <rect x="160" y="50" width="22" height="34" fill="#ff3b30" opacity="0.85"/>
+  <!-- aircraft depth charges 9 - 16 m -->
+  <rect x="190" y="67" width="22" height="13" fill="#ffe14a" opacity="0.9"/>
+  <!-- mines 4 - 35 m -->
+  <rect x="220" y="58" width="22" height="59" fill="#ff9a2a" opacity="0.85"/>
+
+  <g font-size="13">
+    <line x1="111" y1="81" x2="111" y2="174" stroke="#39ff14"/>
+    <text x="100" y="190" fill="#39ff14">PERISCOPE 0-16.5 M</text>
+    <line x1="141" y1="98" x2="141" y2="194" stroke="#39ff14"/>
+    <text x="130" y="210" fill="#39ff14">FIRE TORPEDOES 0-25 M</text>
+    <line x1="171" y1="84" x2="290" y2="84" stroke="#ff3b30"/>
+    <text x="296" y="88" fill="#ff3b30">ENEMY TORPEDOES HIT 0-18 M</text>
+    <line x1="212" y1="72" x2="290" y2="66" stroke="#ffe14a"/>
+    <text x="296" y="68" fill="#ffe14a">AIRCRAFT DEPTH CHARGES SET 9-16 M</text>
+    <line x1="242" y1="112" x2="290" y2="112" stroke="#ff9a2a"/>
+    <text x="296" y="116" fill="#ff9a2a">MOORED MINES 4-35 M (ANCHORAGE)</text>
+  </g>
+
+  <!-- marker lines -->
+  <g font-size="13">
+    <line x1="80" y1="52" x2="840" y2="52" stroke="#39ff14" stroke-width="1" stroke-dasharray="2 4"/>
+    <text x="620" y="46" fill="#39ff14">SURFACED &lt; 1.5 M</text>
+
+    <line x1="260" y1="75" x2="840" y2="75" stroke="#39ff14" stroke-width="1.5"/>
+    <text x="600" y="94" fill="#39ff14">PERISCOPE DEPTH 13 M</text>
+
+    <line x1="80" y1="164" x2="840" y2="164" stroke="#eaffdf" stroke-width="1" stroke-dasharray="6 6"/>
+    <text x="520" y="160" fill="#eaffdf">CRASH DIVE LEVELS OFF AT 60 M</text>
+
+    <line x1="80" y1="221" x2="840" y2="221" stroke="#3aa8ff" stroke-width="2.5" stroke-dasharray="12 6"/>
+    <text x="480" y="214" fill="#3aa8ff">THERMOCLINE 90 M</text>
+    <text x="480" y="242" fill="#3aa8ff" font-size="12">below it enemy hydrophones hear 45% less</text>
+    <text x="480" y="258" fill="#3aa8ff" font-size="12">and ASDIC reaches only 45% as far</text>
+
+    <rect x="80" y="468" width="760" height="114" fill="#ff3b30" opacity="0.18"/>
+    <line x1="80" y1="468" x2="840" y2="468" stroke="#ff3b30" stroke-width="2"/>
+    <text x="300" y="462" fill="#ff3b30">SAFE DEPTH 220 M</text>
+    <text x="300" y="500" fill="#ff3b30" font-size="12">the hull loses strength every second; the deeper, the faster</text>
+    <line x1="80" y1="582" x2="840" y2="582" stroke="#ff3b30" stroke-width="3"/>
+    <text x="300" y="604" fill="#ff3b30">CRUSH DEPTH 280 M: THE BOAT IS LOST</text>
+  </g>
+</svg>

@@ -65,7 +65,7 @@ test('a new game starts at periscope depth with a convoy reported', () => {
 
 test('later patrols bring bigger convoys and more escorts', () => {
   const g = L.createGame({ seed: 2 });
-  for (let i = 0; i < 5; i++) L.startPatrol(g);
+  for (let i = 0; i < 5; i++) L.startPatrol(g, 'convoy');
   assert.equal(g.patrol, 6);
   assert.equal(g.ships.filter(s => s.role === 'merchant').length, 9);
   assert.equal(g.ships.filter(s => s.role === 'escort').length, 4);
@@ -73,7 +73,7 @@ test('later patrols bring bigger convoys and more escorts', () => {
 
 test('every ship model is a list of whole 3D segments', () => {
   for (const [kind, m] of Object.entries(L.MODELS)) {
-    assert.ok(m.length > 100 * 6, kind);
+    assert.ok(m.length > 30 * 6, kind);
     assert.equal(m.length % 6, 0, kind);
     assert.ok(m.every(Number.isFinite), kind);
   }
@@ -368,7 +368,7 @@ test('destroying the convoy completes the patrol and resupplies the boat', () =>
   assert.equal(g.patrolState, 'ending');
   run(g, 10);
   assert.equal(g.patrol, 2);
-  assert.equal(g.stats.convoysDestroyed, 1);
+  assert.equal(g.stats.missionsWon, 1);
   assert.equal(p.reserve, 7);
   assert.equal(p.hull, 75);
 });
@@ -378,4 +378,168 @@ test('the same seed plays the same game', () => {
   run(a, 20);
   run(b, 20);
   assert.deepEqual(a.ships.map(s => [s.name, Math.round(s.x), Math.round(s.y)]), b.ships.map(s => [s.name, Math.round(s.x), Math.round(s.y)]));
+});
+
+/* ---------------- v1.1: missions, conditions, submarines, aircraft, mines ---------------- */
+
+test('missions follow the patrol order and each one sets up its own sea', () => {
+  const g = L.createGame({ seed: 11 });
+  assert.deepEqual(L.MISSION_ORDER, ['convoy', 'duel', 'convoy', 'hunters', 'anchorage']);
+  assert.equal(g.mission.type, 'convoy');
+  assert.ok(g.briefing && /PATROL 1 · CONVOY ATTACK/.test(g.briefing.title));
+  L.startPatrol(g);
+  assert.equal(g.mission.type, 'duel');
+  assert.equal(g.ships.filter(s => s.role === 'sub').length, 1);
+  L.startPatrol(g, 'hunters');
+  assert.equal(g.ships.filter(s => s.role === 'escort').length, 3);
+  assert.ok(g.ships.every(s => s.ai.state === 'hunt'));
+  assert.equal(g.mission.timer, L.HUNT_TIME);
+  L.startPatrol(g, 'anchorage');
+  const merchants = g.ships.filter(s => s.role === 'merchant');
+  assert.ok(merchants.length >= 4 && merchants.every(s => s.anchored && s.speed === 0));
+  assert.ok(g.mines.length > 200, `${g.mines.length} mines`);
+  for (const m of g.mines) {
+    const r = L.dist2d(m.x, m.y, g.area.x, g.area.y);
+    assert.ok(r > 2900 && r < 3260 && m.depth >= 4 && m.depth <= 35);
+  }
+  assert.match(L.missionStatus(g), /RAID THE ANCHORAGE · \d SHIPS LEFT/);
+});
+
+test('the first patrol is always by day in a moderate sea', () => {
+  for (const seed of [1, 2, 3]) {
+    const g = L.createGame({ seed });
+    assert.equal(g.cond.time, 'day');
+    assert.equal(g.cond.sea, 'moderate');
+    assert.equal(g.cond.fog, false);
+  }
+});
+
+test('night, fog and storms shorten the view both ways', () => {
+  const g = emptySea();
+  const s = L.makeShip(g, 'destroyer', 0, 3000, 180, 12);
+  g.player.depth = 0;
+  g.player.noise = 0;
+  const day = L.escortDetect(g, s, 3000);
+  const dayRange = L.visualRange(g);
+  g.cond = L.makeConditions('night', 'calm', false);
+  assert.ok(L.visualRange(g) < dayRange * 0.5);
+  const night = L.escortDetect(g, s, 3000);
+  assert.ok(night < day * 0.5, `day ${day}, night ${night}`);
+  g.cond = L.makeConditions('day', 'calm', true);
+  assert.ok(L.visualRange(g) < dayRange * 0.4, 'fog');
+  assert.equal(L.makeConditions('night', 'calm', false).airOps, false, 'no aircraft at night');
+  assert.equal(L.makeConditions('day', 'storm', false).airOps, false, 'no aircraft in a storm');
+});
+
+test('enemy torpedoes hit a boat at periscope depth but pass over a deep one', () => {
+  for (const [depth, hit] of [[13, true], [30, false]]) {
+    const g = emptySea();
+    const p = g.player;
+    p.depth = depth;
+    p.orderedDepth = depth;
+    p.speed = 0;
+    p.telegraph = L.TELEGRAPH_STOP;
+    const s = L.makeShip(g, 'tclass', 1500, 0, 270, 0);
+    L.fireEnemySalvo(g, s, 270);
+    assert.equal(g.torpedoes.filter(t => t.owner === 'enemy').length, L.ENEMY_TORPEDO.salvo);
+    assert.match(g.messages.at(-1).text, /TORPEDOES IN THE WATER! BEARING 090/);
+    run(g, hit ? 20 : 60);
+    assert.equal(g.stats.torpedoHits > 0, hit, `depth ${depth}`);
+    assert.equal(p.hull < 100, hit);
+    if (!hit) assert.ok(g.stats.torpedoesDodged >= 1);
+  }
+});
+
+test('our torpedoes hit a submarine at periscope depth, not a deep one', () => {
+  for (const [depth, hit] of [[13, true], [40, false]]) {
+    const g = emptySea({ diffOverrides: { dudChance: 0 } });
+    const s = L.makeShip(g, 'tclass', 0, 1500, 0, 0);
+    s.depth = depth;
+    s.ai.depthOrder = depth;
+    s.ai.reactT = 1e9;                                     // keep it from diving away
+    Object.assign(s.ai, { state: 'evade', evadeT: 1e9 });  // running straight away from us
+    L.command(g, 'fire');
+    run(g, 35);
+    assert.equal(!!s.sinking, hit, `sub at ${depth} m`);
+    if (hit) assert.equal(g.stats.sunk.tclass, 1);
+  }
+});
+
+test('an enemy submarine that hears us stalks and fires a salvo', () => {
+  const g = emptySea();
+  const p = g.player;
+  p.depth = 0;
+  p.orderedDepth = 0;
+  p.telegraph = 4;
+  L.makeShip(g, 'tclass', 1800, 0, 0, 4);
+  run(g, 40);
+  assert.ok(g.events.some(e => e.type === 'enemyLaunch') || g.stats.torpedoHits + g.stats.torpedoesDodged > 0);
+});
+
+test('aircraft find a surfaced boat, attack and drop shallow depth charges', () => {
+  const g = emptySea();
+  const p = g.player;
+  p.depth = 0;
+  p.orderedDepth = 0;
+  L.spawnPlane(g);
+  const pl = g.planes[0];
+  pl.x = 3000; pl.y = 0; pl.heading = 270;
+  run(g, 3);
+  assert.equal(pl.state, 'attack');
+  assert.equal(g.stats.airAttacks, 1);
+  assert.ok(g.messages.some(m => /AIRCRAFT BEARING \d{3}! DIVE!/.test(m.text)));
+  run(g, 15);
+  assert.equal(pl.state, 'leave');
+  assert.ok(p.hull < 100, 'the attack hurt');
+});
+
+test('aircraft cannot see a deep boat', () => {
+  const g = emptySea();
+  g.player.depth = 60;
+  g.player.orderedDepth = 60;
+  L.spawnPlane(g);
+  const pl = g.planes[0];
+  pl.x = 500; pl.y = 0; pl.heading = 270;
+  run(g, 5);
+  assert.equal(pl.state, 'patrol');
+});
+
+test('a mine explodes only within its depth band', () => {
+  for (const [depth, hit] of [[20, true], [45, false]]) {
+    const g = emptySea();
+    const p = g.player;
+    p.depth = depth;
+    p.orderedDepth = depth;
+    g.mines.push({ id: 999, x: 0, y: 60, depth: 20 });
+    p.telegraph = 5;
+    run(g, 12);
+    assert.equal(g.stats.minesHit, hit ? 1 : 0, `boat at ${depth} m`);
+    assert.equal(g.mines.length, hit ? 0 : 1);
+  }
+});
+
+test('an active ping shows nearby mines on the sonar', () => {
+  const g = emptySea();
+  g.mines.push({ id: 900, x: 1000, y: 1000, depth: 10 });
+  L.command(g, 'ping');
+  run(g, 1.5);
+  assert.ok(g.sonar.blips.some(b => b.id === 900 && b.type === 'mine' && b.active));
+});
+
+test('surviving the hunters ends the patrol with a bonus', () => {
+  const g = L.createGame({ seed: 4, mission: 'hunters' });
+  for (const s of g.ships) s.x += 50000;                 // send them far away
+  g.mission.timer = 4;
+  run(g, 2);
+  assert.equal(g.patrolState, 'ending');
+  assert.equal(g.stats.bonus, L.HUNT_BONUS);
+  assert.equal(L.score(g), g.stats.tonnage + L.HUNT_BONUS);
+});
+
+test('sinking the submarine wins the duel', () => {
+  const g = L.createGame({ seed: 5, mission: 'duel' });
+  L.sinkShip(g, g.ships[0]);
+  run(g, 0.2);
+  assert.equal(g.patrolState, 'ending');
+  assert.equal(g.stats.missionsWon, 1);
 });

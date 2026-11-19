@@ -22,10 +22,12 @@ function loadLogic() {
   const exported = [
     'VERSION', 'TIME_SCALE', 'KN', 'DEG', 'TELEGRAPH', 'TELEGRAPH_STOP', 'PERISCOPE_DEPTH', 'TUBE_MAX_DEPTH',
     'THERMOCLINE', 'SAFE_DEPTH', 'CRUSH_DEPTH', 'SUB', 'TORPEDO', 'CHARGE', 'SONAR_RANGE', 'DIFFICULTY',
-    'SHIP_CLASSES', 'MODELS',
+    'SHIP_CLASSES', 'MODELS', 'ENEMY_TORPEDO', 'SUB_HIT_DEPTH', 'MINE', 'HUNT_TIME', 'HUNT_BONUS', 'MISSION_ORDER',
+    'PLANE_CLASSES', 'PERISCOPE_MAX', 'SURFACED_DEPTH',
     'clamp', 'wrap360', 'angleDiff', 'bearingTo', 'dist2d', 'makeRng', 'interceptCourse',
     'createGame', 'startPatrol', 'makeShip', 'command', 'step', 'scopeAvailable', 'viewHeading',
     'firingSolution', 'fireTorpedo', 'escortDetect', 'sinkShip', 'damagePlayer',
+    'makeConditions', 'visualRange', 'missionStatus', 'subDetect', 'fireEnemySalvo', 'spawnPlane', 'score',
   ];
   return new Function(logic + '\nreturn { ' + exported.join(', ') + ' };')();
 }

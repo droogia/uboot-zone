@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.0';
+const VERSION = '001.1';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -99,6 +99,7 @@ const SHIP_CLASSES = {
   tanker:    { cls: 'Tanker',                prefix: 'MV',  role: 'merchant', length: 145, beam: 19,  maxSpeed: 11, turnRate: 1.0, loud: 0.6,  grt: [8000, 11000] },
   corvette:  { cls: 'Flower-class corvette', prefix: 'HMS', role: 'escort',   length: 62,  beam: 10,  maxSpeed: 16, turnRate: 4.0, loud: 0.45, grt: [925, 925],   charges: 40, attackSpeed: 15 },
   destroyer: { cls: 'V&W-class destroyer',   prefix: 'HMS', role: 'escort',   length: 95,  beam: 9.4, maxSpeed: 34, turnRate: 3.2, loud: 0.5,  grt: [1300, 1300], charges: 30, attackSpeed: 26 },
+  tclass:    { cls: 'T-class submarine',     prefix: 'HMS', role: 'sub',      length: 84,  beam: 8,   maxSpeed: 15, subSpeed: 9, turnRate: 2.5, loud: 0.3, grt: [1090, 1090] },
 };
 
 const SHIP_NAMES = {
@@ -111,7 +112,34 @@ const SHIP_NAMES = {
               'Hibiscus', 'Marigold'],
   destroyer: ['Vanoc', 'Walker', 'Volunteer', 'Wanderer', 'Viscount', 'Winchelsea', 'Vesper', 'Whitehall', 'Verity',
               'Wolverine'],
+  tclass:    ['Triad', 'Truant', 'Tigris', 'Triton', 'Taku', 'Tetrarch', 'Thistle', 'Thunderbolt', 'Tribune', 'Trident'],
 };
+
+const PLANE_CLASSES = {
+  sunderland: { cls: 'Sunderland flying boat', speedKn: 150, charges: 6, length: 26 },
+  hudson:     { cls: 'Hudson patrol bomber',   speedKn: 190, charges: 4, length: 14 },
+};
+
+// Enemy submarine torpedoes run shallow: a U-boat deeper than hitDepth is safe from them.
+const ENEMY_TORPEDO = { speedKn: 45, range: 5000, hitDepth: 18, damage: 75, salvo: 3, spread: 2.5, reload: 150 };
+const SUB_HIT_DEPTH = 15;           // likewise, our torpedoes only hit a submarine shallower than this
+const MINE = { radius: 11, depthWindow: 9, damage: 80, rings: [3000, 3160], spacing: 120, channel: 320 };
+const AIR_DC_DEPTH = [9, 16];       // aircraft depth charges are set shallow
+const AIR_CHARGE = { radius: 45, maxDamage: 50 };  // and they are smaller
+
+const CONDITIONS = {
+  time: { day: { name: 'DAY', vis: 1 }, dusk: { name: 'DUSK', vis: 0.7 }, night: { name: 'NIGHT', vis: 0.4 } },
+  sea: {
+    calm:     { name: 'CALM SEA',     wave: 0.5, hear: 1 },
+    moderate: { name: 'MODERATE SEA', wave: 1,   hear: 1 },
+    storm:    { name: 'STORM',        wave: 2.2, hear: 0.7 },
+  },
+};
+
+const MISSION_ORDER = ['convoy', 'duel', 'convoy', 'hunters', 'anchorage'];
+const MISSION_NAMES = { convoy: 'CONVOY ATTACK', duel: 'SUBMARINE DUEL', hunters: 'ESCAPE THE HUNTERS', anchorage: 'ANCHORAGE RAID' };
+const HUNT_TIME = 1440;             // game seconds to survive the hunters (6 real minutes)
+const HUNT_BONUS = 3000;
 
 /* =========================================================
    MATH HELPERS
@@ -335,11 +363,46 @@ function buildCorvette() {
   return m.edges;
 }
 
+function buildTClass() {
+  const m = modelBuilder();
+  m.hull({ length: 84, beam: 8, freeboard: 1.4, sheerBow: 1.2, sheerStern: 0.2, bowLen: 20, sternLen: 18, sternWidth: 0.2, rake: 2 });
+  m.box(-1.7, 1.7, 1.4, 5.2, 2, 12);                       // conning tower
+  m.box(-1.2, 1.2, 5.2, 6, 4, 10);                         // bridge
+  m.line(0, 6, 8.5, 0, 12.5, 8.5);                         // periscopes
+  m.line(0, 6, 6.5, 0, 11.5, 6.5);
+  m.line(-0.4, 12.5, 8.5, 0.4, 12.5, 8.5);
+  m.box(-0.9, 0.9, 1.4, 2.6, 16, 18.5);                    // deck gun
+  m.line(0, 2.2, 18.5, 0, 2.5, 23);
+  m.line(0, 1.4, 40, 0, 5.2, 12);                          // jumping wires
+  m.line(0, 5.2, 2, 0, 1.4, -38);
+  return m.edges;
+}
+
+function buildPlane(span, length, engines, flyingBoat) {
+  const m = modelBuilder();
+  const L = length / 2, fh = flyingBoat ? 2.6 : 1.5;
+  m.poly([[0, 0, L + 1.5], [-fh, -fh * 0.6, L - 3], [-fh * 0.7, -fh * 0.3, -L], [fh * 0.7, -fh * 0.3, -L], [fh, -fh * 0.6, L - 3]], true);
+  m.poly([[0, 0, L + 1.5], [0, fh, L - 4], [0, fh * 0.6, -L], [0, -fh * 0.3, -L]], false);
+  m.line(-fh, -fh * 0.6, L - 3, -fh * 0.7, -fh * 0.3, -L);
+  m.line(fh, -fh * 0.6, L - 3, fh * 0.7, -fh * 0.3, -L);
+  const wy = flyingBoat ? fh : 0, wz = L * 0.25, chord = length * 0.2;
+  m.poly([[-span / 2, wy, wz - chord * 0.3], [span / 2, wy, wz - chord * 0.3], [span / 2, wy, wz - chord], [-span / 2, wy, wz - chord]], true);
+  m.poly([[-span * 0.17, fh * 0.4, -L + 2.5], [span * 0.17, fh * 0.4, -L + 2.5], [span * 0.17, fh * 0.4, -L], [-span * 0.17, fh * 0.4, -L]], true);
+  m.poly([[0, fh * 0.6, -L + 3.5], [0, fh * 0.6 + 4.5, -L + 0.5], [0, fh * 0.6 + 4.5, -L], [0, fh * 0.6, -L]], false);
+  const xs = engines === 4 ? [-9, -4.5, 4.5, 9] : [-4, 4];
+  for (const x of xs) m.box(x - 0.7, x + 0.7, wy - 1.2, wy, wz - chord * 0.6, wz + 1.5);
+  if (flyingBoat) for (const x of [-span * 0.42, span * 0.42]) m.line(x, wy, wz - chord * 0.6, x, wy - 3, wz - chord * 0.6);
+  return m.edges;
+}
+
 const MODELS = {
   freighter: buildFreighter(),
   tanker: buildTanker(),
   destroyer: buildDestroyer(),
   corvette: buildCorvette(),
+  tclass: buildTClass(),
+  sunderland: buildPlane(34, 26, 4, true),
+  hudson: buildPlane(20, 14, 2, false),
 };
 
 /* =========================================================
@@ -392,7 +455,15 @@ function createGame(opts = {}) {
     charges: [],
     shells: [],
     effects: [],
+    planes: [],
+    mines: [],
     convoy: null,
+    area: null,                     // centre of the action when there is no convoy
+    cond: makeConditions('day', 'moderate', false),
+    mission: { type: 'convoy', name: MISSION_NAMES.convoy, timer: 0 },
+    briefing: null,
+    air: { on: false, nextT: 0 },
+    warn: { torpedo: false, aircraft: false, mines: false },
     detected: false,
     asdicNear: 0,                   // real time of the last enemy ping heard close by
     sonar: { sweep: 0, blips: [], ping: null, pingReady: 0 },
@@ -403,14 +474,36 @@ function createGame(opts = {}) {
     events: [],
     stats: {
       fired: 0, hits: 0, duds: 0, misses: 0,
-      sunk: { freighter: 0, tanker: 0, corvette: 0, destroyer: 0 },
-      tonnage: 0, chargesNear: 0, damageTaken: 0, maxDepth: PERISCOPE_DEPTH,
-      timeSubmerged: 0, pings: 0, patrolsDone: 0, convoysDestroyed: 0,
+      sunk: { freighter: 0, tanker: 0, corvette: 0, destroyer: 0, tclass: 0 },
+      tonnage: 0, bonus: 0, chargesNear: 0, damageTaken: 0, maxDepth: PERISCOPE_DEPTH,
+      timeSubmerged: 0, pings: 0, patrolsDone: 0, missionsWon: 0,
+      airAttacks: 0, torpedoesDodged: 0, torpedoHits: 0, minesHit: 0,
     },
   };
-  if (!opts.noPatrol) startPatrol(g);
+  if (!opts.noPatrol) startPatrol(g, opts.mission);
   return g;
 }
+
+function makeConditions(time, sea, fog) {
+  const t = CONDITIONS.time[time], s = CONDITIONS.sea[sea];
+  return {
+    time, sea, fog,
+    vis: t.vis * (fog ? 0.35 : 1) * (sea === 'storm' ? 0.8 : 1),
+    wave: s.wave,
+    hear: s.hear,
+    airOps: time !== 'night' && sea !== 'storm' && !fog,
+  };
+}
+
+function conditionsText(c) {
+  return [CONDITIONS.time[c.time].name, CONDITIONS.sea[c.sea].name].concat(c.fog ? ['FOG'] : []).join(' · ');
+}
+
+function visualRange(g) {
+  return VIEW.visualRange * g.cond.vis;
+}
+
+const score = g => g.stats.tonnage + g.stats.bonus;
 
 function say(g, text, color) {
   g.messages.push({ text, color: color || 'green', t: g.realTime });
@@ -443,6 +536,14 @@ function makeShip(g, kind, x, y, heading, speed) {
     station: { lat: 0, lon: 0 },
   };
   ship.maxHp = ship.hp;
+  if (c.role === 'sub') {
+    ship.depth = PERISCOPE_DEPTH;
+    ship.ai = {
+      state: 'patrol', contact: 0, hasContact: false, lastKnown: null, lastKnownT: -1e9, depthEst: 50,
+      detT: g.rng(), salvoT: g.rng.range(20, 60), evadeT: 0, depthOrder: PERISCOPE_DEPTH, crash: false,
+      wp: null, reactT: -1, heard: {},
+    };
+  }
   if (c.role === 'escort') {
     ship.ai = {
       state: 'escort', contact: 0, hasContact: false, lastKnown: null, lastKnownT: -1e9,
@@ -454,18 +555,54 @@ function makeShip(g, kind, x, y, heading, speed) {
   return ship;
 }
 
-function startPatrol(g) {
+function startPatrol(g, type) {
   g.patrol++;
   const n = g.patrol, rng = g.rng, p = g.player;
   g.ships = [];
   g.charges = [];
   g.shells = [];
+  g.planes = [];
+  g.mines = [];
+  g.torpedoes = [];
+  g.sonar.blips = [];
   g.detected = false;
+  g.convoy = null;
+  g.area = null;
   p.lock = null;
+  if (!type || !MISSION_NAMES[type]) {
+    type = n <= MISSION_ORDER.length ? MISSION_ORDER[n - 1] : rng.pick(['convoy', 'convoy', 'duel', 'hunters', 'anchorage']);
+  }
+  if (n === 1) g.cond = makeConditions('day', 'moderate', false);
+  else {
+    const r1 = rng(), r2 = rng();
+    const time = r1 < 0.45 ? 'day' : r1 < 0.7 ? 'dusk' : 'night';
+    const sea = r2 < 0.3 ? 'calm' : r2 < 0.8 ? 'moderate' : 'storm';
+    g.cond = makeConditions(time, sea, sea !== 'storm' && rng() < 0.15);
+  }
+  g.mission = { type, name: MISSION_NAMES[type], timer: 0 };
+  const b = rng() * 360;
+  const spawn = { convoy: spawnConvoy, duel: spawnDuel, hunters: spawnHunters, anchorage: spawnAnchorage }[type];
+  const intel = spawn(g, n, b);
+  g.air = { on: g.cond.airOps && (type === 'hunters' || type === 'anchorage' || (type === 'convoy' && n >= 2)), nextT: rng.range(150, 320) };
+  g.patrolState = 'active';
+  g.briefing = {
+    title: `PATROL ${n} · ${g.mission.name}`,
+    orders: intel.orders,
+    intel: intel.intel,
+    conditions: conditionsText(g.cond),
+    air: g.air.on ? 'Enemy aircraft are patrolling the area.' : 'No enemy air cover expected.',
+  };
+  say(g, `PATROL ${n}: ${intel.short}`, 'yellow');
+  emit(g, 'patrol', { n, mission: type });
+}
+
+const brg3 = b => String(Math.round(wrap360(b)) % 360).padStart(3, '0');
+
+function spawnConvoy(g, n, b) {
+  const rng = g.rng, p = g.player;
   const merchants = Math.min(3 + n, 10);
   const escorts = Math.min(1 + Math.floor(n / 2), 5);
   const speed = 7 + Math.min(n - 1, 4) * 0.6;
-  const b = rng() * 360;
   const d = rng.range(9000, 11000);
   const cx = p.x + Math.sin(b * DEG) * d, cy = p.y + Math.cos(b * DEG) * d;
   const course = wrap360(b + 180 + rng.range(-35, 35));
@@ -496,10 +633,86 @@ function startPatrol(g) {
     s.station = escortStations[i];
     placeOnStation(g, s);
   }
-  g.patrolState = 'active';
-  const rangeKm = Math.round(d / 1000);
-  say(g, `PATROL ${n}: CONVOY REPORTED BEARING ${String(Math.round(b)).padStart(3, '0')}, RANGE ~${rangeKm} KM`, 'yellow');
-  emit(g, 'patrol', { n });
+  return {
+    short: `CONVOY REPORTED BEARING ${brg3(b)}, RANGE ~${Math.round(d / 1000)} KM`,
+    orders: 'Intercept the convoy and sink the merchant ships. The escorts are worth tonnage too, but they bite.',
+    intel: `${merchants} merchants with ${escorts} escort${escorts > 1 ? 's' : ''}, bearing ${brg3(b)}, range about ${Math.round(d / 1000)} km, speed about ${Math.round(speed)} knots.`,
+  };
+}
+
+function spawnDuel(g, n, b) {
+  const rng = g.rng, p = g.player;
+  const count = n >= 7 ? 2 : 1;
+  const d = rng.range(6000, 8000);
+  const x = p.x + Math.sin(b * DEG) * d, y = p.y + Math.cos(b * DEG) * d;
+  g.area = { x, y, r: 2500 };
+  for (let i = 0; i < count; i++) {
+    const s = makeShip(g, 'tclass', x + rng.range(-800, 800), y + rng.range(-800, 800), rng() * 360, 4);
+    if (g.cond.time === 'night') { s.depth = 0; s.ai.depthOrder = 0; }
+    // It has been told roughly where we are, too.
+    s.ai.state = 'stalk';
+    setLastKnown(g, s, 1500);
+  }
+  return {
+    short: `ENEMY SUBMARINE REPORTED BEARING ${brg3(b)}`,
+    orders: `${count > 1 ? 'Two enemy submarines are' : 'An enemy submarine is'} hunting in this sector. Find ${count > 1 ? 'them' : 'it'} and sink ${count > 1 ? 'them' : 'it'} before ${count > 1 ? 'they sink' : 'it sinks'} you.`,
+    intel: `Last reported bearing ${brg3(b)}, range about ${Math.round(d / 1000)} km. Our torpedoes only hit a submarine at periscope depth or surfaced. Its torpedoes run shallow: deeper than ${ENEMY_TORPEDO.hitDepth} m you are safe from them.`,
+  };
+}
+
+function spawnHunters(g, n, b) {
+  const rng = g.rng, p = g.player;
+  const count = Math.min(3 + Math.floor(n / 8), 5);
+  g.area = { x: p.x, y: p.y, r: 3000 };
+  g.mission.timer = HUNT_TIME;
+  for (let i = 0; i < count; i++) {
+    const a = b + (i - (count - 1) / 2) * 50 + rng.range(-10, 10);
+    const d = rng.range(3200, 4500);
+    const kind = i === count - 1 && count > 3 ? 'corvette' : 'destroyer';
+    const s = makeShip(g, kind, p.x + Math.sin(a * DEG) * d, p.y + Math.cos(a * DEG) * d, wrap360(a + 180), 14);
+    s.ai.state = 'hunt';
+    s.ai.contact = 0.3;
+    setLastKnown(g, s, 700);
+  }
+  return {
+    short: `HUNTER GROUP CLOSING IN! SURVIVE ${Math.round(HUNT_TIME / TIME_SCALE / 60)} MINUTES`,
+    orders: `A hunter-killer group knows roughly where you are. Stay alive for ${Math.round(HUNT_TIME / TIME_SCALE / 60)} minutes, or sink them all. Survival is worth a ${HUNT_BONUS.toLocaleString('en-US')} point bonus.`,
+    intel: `${count} escorts closing in from bearing ${brg3(b)}, range 3 to 5 km. Go deep, go quiet, use the thermocline.`,
+  };
+}
+
+function spawnAnchorage(g, n, b) {
+  const rng = g.rng, p = g.player;
+  const d = rng.range(8000, 9000);
+  const cx = p.x + Math.sin(b * DEG) * d, cy = p.y + Math.cos(b * DEG) * d;
+  g.area = { x: cx, y: cy, r: 1500 };
+  const count = Math.min(4 + Math.floor(n / 3), 7);
+  const ride = rng.range(150, 190);
+  for (let i = 0; i < count; i++) {
+    const a = rng() * TAU, r = rng.range(150, 750);
+    const s = makeShip(g, i % 3 === 1 ? 'tanker' : 'freighter', cx + Math.sin(a) * r, cy + Math.cos(a) * r, wrap360(ride + rng.range(-8, 8)), 0);
+    s.anchored = true;
+  }
+  const guards = n >= 8 ? 3 : 2;
+  for (let i = 0; i < guards; i++) {
+    const a = (i / guards) * TAU;
+    makeShip(g, i === 2 ? 'destroyer' : 'corvette', cx + Math.sin(a) * 1500, cy + Math.cos(a) * 1500, wrap360(a / DEG + 90), 8);
+  }
+  // Two rings of moored mines with one swept channel.
+  const channel = rng() * 360;
+  for (const R of MINE.rings) {
+    const k = Math.round((TAU * R) / MINE.spacing);
+    for (let i = 0; i < k; i++) {
+      const a = (i / k) * 360 + rng.range(-0.6, 0.6);
+      if (Math.abs(angleDiff(a, channel)) * DEG * R < MINE.channel / 2) continue;
+      g.mines.push({ id: g.nextId++, x: cx + Math.sin(a * DEG) * R, y: cy + Math.cos(a * DEG) * R, depth: rng.range(4, 35) });
+    }
+  }
+  return {
+    short: `ANCHORAGE BEARING ${brg3(b)}, ~${Math.round(d / 1000)} KM · MINEFIELD AHEAD`,
+    orders: 'Enemy merchants lie at anchor behind a minefield. Get through, sink them, get out.',
+    intel: `${count} ships at anchor, bearing ${brg3(b)}, about ${Math.round(d / 1000)} km, guarded by ${guards} escorts. Mines are moored 4 to 35 m deep about 3 km out; a swept channel crosses them somewhere. An active ping shows the mines.`,
+  };
 }
 
 function stationPoint(g, s) {
@@ -593,7 +806,8 @@ function toggleLock(g) {
   for (const s of g.ships) {
     if (s.sinking) continue;
     const d = dist2d(p.x, p.y, s.x, s.y);
-    if (d > VIEW.visualRange) continue;
+    if (d > visualRange(g)) continue;
+    if (s.role === 'sub' && s.depth > PERISCOPE_MAX - 2) continue;
     const ang = Math.abs(angleDiff(bearingTo(p.x, p.y, s.x, s.y), vh));
     if (ang < bestAng) { bestAng = ang; best = s; }
   }
@@ -628,7 +842,8 @@ function updateLock(g) {
     return;
   }
   const d = dist2d(p.x, p.y, s.x, s.y);
-  if (scopeAvailable(g) && d < VIEW.visualRange) {
+  const visible = s.role !== 'sub' || s.depth <= PERISCOPE_MAX - 2;
+  if (scopeAvailable(g) && d < visualRange(g) && visible) {
     const brg = bearingTo(p.x, p.y, s.x, s.y);
     lock.obs = {
       t: g.time,
@@ -735,6 +950,7 @@ function activePing(g) {
     s.ai.contact = Math.min(1.5, s.ai.contact + 0.5);
     setLastKnown(g, s, d * 0.02 + 60);
     if (s.ai.state === 'escort') s.ai.state = 'hunt';
+    if (s.ai.state === 'patrol') s.ai.state = 'stalk';
   }
 }
 
@@ -775,9 +991,11 @@ function stepSim(g, dt) {
   stepConvoy(g, dt);
   for (const s of g.ships) stepShip(g, s, dt);
   g.ships = g.ships.filter(s => !s.removed);
+  stepAir(g, dt);
   stepTorpedoes(g, dt);
   stepCharges(g, dt);
   stepShells(g, dt);
+  stepMines(g, dt);
   stepPatrol(g, dt);
 }
 
@@ -909,6 +1127,8 @@ function stepShip(g, s, dt) {
       const desired = wrap360(c.course + clamp(lat * 0.08, -30, 30));
       steer(s, desired, clamp(c.speed + along * 0.01, 2, cls.maxSpeed), dt, cls.turnRate, 40);
     }
+  } else if (s.role === 'sub') {
+    stepSub(g, s, dt);
   } else {
     stepEscort(g, s, dt);
   }
@@ -930,14 +1150,15 @@ function escortDetect(g, s, d) {
   const p = g.player;
   if (!p.alive) return 0;
   let pr = 0;
+  const vis = g.cond.vis;
   if (p.depth < SURFACED_DEPTH) {
-    const R = 5000;
+    const R = 5000 * vis;
     if (d < R) pr += 1.5 * (1 - d / R) + 0.2;
   } else if (p.periscopeRaise > 0.5 && p.depth <= PERISCOPE_MAX) {
-    const R = 900 + 120 * Math.abs(p.speed);
+    const R = (900 + 120 * Math.abs(p.speed)) * vis * (g.cond.sea === 'storm' ? 0.5 : 1);
     if (d < R) pr += 0.8 * (1 - d / R);
   }
-  let hr = 300 + 3200 * p.noise;
+  let hr = (300 + 3200 * p.noise) * g.cond.hear;
   if (s.speed > 20) hr *= 0.35;
   if (p.depth > THERMOCLINE) hr *= 0.55;
   if (d < hr) pr += 0.6 * (1 - d / hr);
@@ -1067,12 +1288,22 @@ function stepEscort(g, s, dt) {
     else if (g.time - ai.lastKnownT > 300) ai.state = 'escort';
   } else {
     ai.state = 'escort';
-    const pt = stationPoint(g, s);
-    const c = g.convoy || { course: s.heading, speed: s.targetSpeed }, h = c.course * DEG;
-    const weave = Math.sin(g.time / 90 + ai.weave) * 350;
-    tx = pt.x + Math.cos(h) * weave; ty = pt.y - Math.sin(h) * weave;
-    const dl = dist2d(s.x, s.y, tx, ty);
-    spd = clamp(c.speed + 3 + dl * 0.004, 4, Math.min(cls.maxSpeed, 20));
+    if (g.convoy) {
+      const pt = stationPoint(g, s);
+      const c = g.convoy, h = c.course * DEG;
+      const weave = Math.sin(g.time / 90 + ai.weave) * 350;
+      tx = pt.x + Math.cos(h) * weave; ty = pt.y - Math.sin(h) * weave;
+      const dl = dist2d(s.x, s.y, tx, ty);
+      spd = clamp(c.speed + 3 + dl * 0.004, 4, Math.min(cls.maxSpeed, 20));
+    } else if (g.area) {
+      // Guard patrol: circle the area, each ship at its own phase.
+      const a = g.time * 0.004 + ai.weave;
+      tx = g.area.x + Math.sin(a) * g.area.r; ty = g.area.y + Math.cos(a) * g.area.r;
+      spd = 10;
+    } else {
+      tx = s.x + Math.sin(s.heading * DEG) * 500; ty = s.y + Math.cos(s.heading * DEG) * 500;
+      spd = 8;
+    }
   }
   steer(s, bearingTo(s.x, s.y, tx, ty), spd, dt, cls.turnRate, 15);
 }
@@ -1088,6 +1319,7 @@ function shipHit(s, x, y) {
 function stepTorpedoes(g, dt) {
   const ms = TORPEDO.speedKn * KN;
   for (const t of g.torpedoes) {
+    if (t.owner === 'enemy') { stepEnemyTorpedo(g, t, dt); continue; }
     const turn = TORPEDO.turnRate * dt;
     t.heading = wrap360(t.heading + clamp(angleDiff(t.course, t.heading), -turn, turn));
     t.x += Math.sin(t.heading * DEG) * ms * dt;
@@ -1107,6 +1339,7 @@ function stepTorpedoes(g, dt) {
     }
     for (const s of g.ships) {
       if (s.sinking && s.sinking.t > 8) continue;
+      if (s.role === 'sub' && s.depth > SUB_HIT_DEPTH) continue;   // runs over a deep submarine
       if (!shipHit(s, t.x, t.y)) continue;
       t.done = true;
       const d = dist2d(g.player.x, g.player.y, t.x, t.y);
@@ -1147,7 +1380,7 @@ function sinkShip(g, s) {
   };
   g.stats.sunk[s.kind]++;
   g.stats.tonnage += s.grt;
-  const unit = s.role === 'escort' ? 'TONS' : 'GRT';
+  const unit = s.role === 'merchant' ? 'GRT' : 'TONS';
   say(g, `${s.name} IS SINKING! +${s.grt.toLocaleString('en-US')} ${unit}`, 'green');
   emit(g, 'sunk', { dist: dist2d(g.player.x, g.player.y, s.x, s.y), kind: s.kind });
   if (g.player.lock && g.player.lock.id === s.id) g.player.lock = null;
@@ -1161,7 +1394,7 @@ function alertConvoy(g) {
     c.legT = Math.min(c.legT, 60);
   }
   for (const s of g.ships) {
-    if (!s.ai || s.sinking) continue;
+    if (s.role !== 'escort' || s.sinking) continue;
     s.ai.contact = Math.min(1.5, s.ai.contact + 0.15);
     if (s.ai.state === 'escort' || !s.ai.lastKnown) {
       setLastKnown(g, s, 250 + dist2d(p.x, p.y, s.x, s.y) * 0.05);
@@ -1177,8 +1410,9 @@ function stepCharges(g, dt) {
     if (c.depth < c.target) continue;
     c.done = true;
     const d = Math.hypot(c.x - p.x, c.y - p.y, c.depth - p.depth);
+    const k = c.aerial ? AIR_CHARGE : CHARGE;
     let dmg = 0;
-    if (p.alive && d < CHARGE.radius) dmg = CHARGE.maxDamage * (1 - d / CHARGE.radius) ** 2 * g.diff.damage;
+    if (p.alive && d < k.radius) dmg = k.maxDamage * (1 - d / k.radius) ** 2 * g.diff.damage;
     if (p.alive && d < 250) g.stats.chargesNear++;
     spawnGeyser(g, c.x, c.y, clamp(45 * (1 - c.depth / 90), 4, 45), 3.5);
     emit(g, 'charge', { dist: d, damage: dmg });
@@ -1226,22 +1460,39 @@ function addCrack(g, dmg) {
   p.cracks.push(pts);
 }
 
+function endPatrol(g, won, text) {
+  g.patrolState = 'ending';
+  g.patrolTimer = 30;
+  if (won) g.stats.missionsWon++;
+  say(g, text, won ? 'green' : 'yellow');
+  emit(g, 'patrolEnd', { won });
+}
+
 function stepPatrol(g, dt) {
   if (g.state !== 'playing') return;
   const p = g.player;
   if (g.patrolState === 'active') {
-    const merchants = g.ships.filter(s => s.role === 'merchant' && !s.sinking);
-    if (!merchants.length) {
-      g.patrolState = 'ending';
-      g.patrolTimer = 30;
-      g.stats.convoysDestroyed++;
-      say(g, 'CONVOY DESTROYED! RETURNING TO PATROL LINE', 'green');
-      emit(g, 'patrolEnd', { destroyed: true });
-    } else if (merchants.every(s => dist2d(p.x, p.y, s.x, s.y) > 15000)) {
-      g.patrolState = 'ending';
-      g.patrolTimer = 30;
-      say(g, 'THE CONVOY ESCAPED', 'yellow');
-      emit(g, 'patrolEnd', { destroyed: false });
+    const m = g.mission;
+    const alive = role => g.ships.filter(s => s.role === role && !s.sinking);
+    if (m.type === 'convoy') {
+      const merchants = alive('merchant');
+      if (!merchants.length) endPatrol(g, true, 'CONVOY DESTROYED! RETURNING TO PATROL LINE');
+      else if (merchants.every(s => dist2d(p.x, p.y, s.x, s.y) > 15000)) endPatrol(g, false, 'THE CONVOY ESCAPED');
+    } else if (m.type === 'duel') {
+      const subs = alive('sub');
+      if (!subs.length) endPatrol(g, true, 'ENEMY SUBMARINE SUNK! THE SECTOR IS OURS');
+      else if (subs.every(s => dist2d(p.x, p.y, s.x, s.y) > 20000)) endPatrol(g, false, 'CONTACT LOST: THE SUBMARINE GOT AWAY');
+    } else if (m.type === 'hunters') {
+      m.timer = Math.max(0, m.timer - dt);
+      if (!alive('escort').length) endPatrol(g, true, 'HUNTER GROUP DESTROYED!');
+      else if (m.timer <= 0) {
+        g.stats.bonus += HUNT_BONUS;
+        endPatrol(g, true, `THE HUNTERS GAVE UP! +${HUNT_BONUS.toLocaleString('en-US')} BONUS`);
+      }
+    } else if (m.type === 'anchorage') {
+      const merchants = alive('merchant');
+      if (!merchants.length) endPatrol(g, true, 'ANCHORAGE DESTROYED! GET OUT THROUGH THE MINES');
+      else if (dist2d(p.x, p.y, g.area.x, g.area.y) > 16000) endPatrol(g, false, 'WITHDRAWN FROM THE ANCHORAGE');
     }
   } else if (g.patrolState === 'ending') {
     g.patrolTimer -= dt;
@@ -1254,6 +1505,297 @@ function stepPatrol(g, dt) {
       startPatrol(g);
     }
   }
+}
+
+function missionStatus(g) {
+  if (g.patrolState === 'ending') return 'PATROL COMPLETE · STAND BY';
+  const m = g.mission;
+  const left = role => g.ships.filter(s => s.role === role && !s.sinking).length;
+  if (m.type === 'convoy') return `SINK THE CONVOY · ${left('merchant')} MERCHANTS LEFT`;
+  if (m.type === 'duel') return `SINK THE SUBMARINE · ${left('sub')} LEFT`;
+  if (m.type === 'hunters') {
+    const t = Math.ceil(m.timer / TIME_SCALE);
+    return `SURVIVE ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')} · ${left('escort')} HUNTERS`;
+  }
+  return `RAID THE ANCHORAGE · ${left('merchant')} SHIPS LEFT`;
+}
+
+/* =========================================================
+   ENEMY SUBMARINES, AIRCRAFT, MINES
+   ========================================================= */
+function subDetect(g, s, d) {
+  const p = g.player;
+  if (!p.alive) return 0;
+  let pr = 0;
+  let hr = (600 + 6000 * p.noise) * g.cond.hear;           // submarines have good hydrophones
+  if (s.depth < SURFACED_DEPTH) hr *= 0.6;                 // its own diesels
+  if (d < hr) pr += 0.6 * (1 - d / hr);
+  if (s.depth <= SUB_HIT_DEPTH) {
+    let R = 0;
+    if (p.depth < SURFACED_DEPTH) R = 4500;
+    else if (p.depth <= PERISCOPE_MAX && p.periscopeRaise > 0.5) R = 900 + 120 * Math.abs(p.speed);
+    R *= g.cond.vis;
+    if (d < R) pr += 1.2 * (1 - d / R);
+  }
+  return pr * g.diff.sense;
+}
+
+function stepSub(g, s, dt) {
+  const ai = s.ai, p = g.player, cls = SHIP_CLASSES[s.kind], rng = g.rng;
+  const d = dist2d(p.x, p.y, s.x, s.y);
+  const rate = ai.crash ? 1.6 : 0.8;
+  s.depth = Math.max(0, s.depth + clamp(ai.depthOrder - s.depth, -rate * dt, rate * dt));
+
+  ai.detT -= dt;
+  if (ai.detT <= 0) {
+    ai.detT += 1;
+    const pr = subDetect(g, s, d);
+    ai.contact = clamp(ai.contact + pr * 0.6 - 0.1, 0, 1.5);
+    if (pr > 0.15) setLastKnown(g, s, 30 + d * 0.04);
+    if (!ai.hasContact && ai.contact > 0.6) {
+      ai.hasContact = true;
+      if (ai.state === 'patrol') ai.state = 'stalk';
+    } else if (ai.hasContact && ai.contact < 0.3) ai.hasContact = false;
+  }
+
+  // It may hear our torpedoes coming and go deep, after a short delay.
+  if (ai.reactT > 0) {
+    ai.reactT -= dt;
+    if (ai.reactT <= 0) {
+      ai.depthOrder = 60;
+      ai.crash = true;
+      ai.state = 'evade';
+      ai.evadeT = 90;
+    }
+  } else {
+    for (const t of g.torpedoes) {
+      if (t.owner !== 'player' || ai.heard[t.id]) continue;
+      if (dist2d(t.x, t.y, s.x, s.y) > 1200) continue;
+      ai.heard[t.id] = true;
+      if (rng() < 0.45) ai.reactT = 6;
+    }
+  }
+  ai.salvoT = Math.max(0, ai.salvoT - dt);
+
+  let tx, ty, spd;
+  if (ai.state === 'evade') {
+    ai.evadeT -= dt;
+    const away = bearingTo(p.x, p.y, s.x, s.y) * DEG;
+    tx = s.x + Math.sin(away) * 1000; ty = s.y + Math.cos(away) * 1000;
+    spd = 7;
+    if (ai.evadeT <= 0) {
+      ai.crash = false;
+      ai.depthOrder = PERISCOPE_DEPTH;
+      ai.state = ai.hasContact ? 'stalk' : 'patrol';
+    }
+  } else if (ai.state !== 'patrol' && ai.lastKnown) {
+    ai.state = 'stalk';
+    ai.depthOrder = PERISCOPE_DEPTH;
+    const lk = ai.lastKnown, pv = p.speed * KN;
+    const dl = dist2d(s.x, s.y, lk.x, lk.y);
+    const sol = interceptCourse(s.x, s.y, lk.x, lk.y, Math.sin(p.heading * DEG) * pv, Math.cos(p.heading * DEG) * pv, ENEMY_TORPEDO.speedKn * KN);
+    if (dl > 2600 || !sol) {
+      tx = lk.x; ty = lk.y; spd = 8;
+    } else {
+      tx = s.x + Math.sin(sol.course * DEG) * 1000; ty = s.y + Math.cos(sol.course * DEG) * 1000;
+      spd = 4;
+      if (ai.hasContact && ai.salvoT <= 0 && Math.abs(angleDiff(sol.course, s.heading)) < 20 && s.depth <= SUB_HIT_DEPTH + 5) {
+        fireEnemySalvo(g, s, wrap360(sol.course + rng.gauss() * 2));
+      }
+    }
+    if (!ai.hasContact && g.time - ai.lastKnownT > 400) ai.state = 'patrol';
+  } else {
+    ai.state = 'patrol';
+    // In a duel it keeps getting rough fixes on us (radio direction finding) and resumes the hunt.
+    if (g.mission.type === 'duel' && g.time - ai.lastKnownT > 400) {
+      setLastKnown(g, s, 900);
+      ai.state = 'stalk';
+    }
+    const night = g.cond.time === 'night';
+    ai.depthOrder = night ? 0 : PERISCOPE_DEPTH;
+    if (!ai.wp || dist2d(s.x, s.y, ai.wp.x, ai.wp.y) < 200) {
+      const c = g.area || { x: s.x, y: s.y, r: 2000 };
+      const a = rng() * TAU, r = rng() * c.r;
+      ai.wp = { x: c.x + Math.sin(a) * r, y: c.y + Math.cos(a) * r };
+    }
+    tx = ai.wp.x; ty = ai.wp.y;
+    spd = night ? 9 : 4;
+  }
+  const max = s.depth < SURFACED_DEPTH ? cls.maxSpeed : cls.subSpeed;
+  steer(s, bearingTo(s.x, s.y, tx, ty), Math.min(spd, max), dt, cls.turnRate, 20);
+}
+
+function fireEnemySalvo(g, s, course) {
+  const n = ENEMY_TORPEDO.salvo, p = g.player;
+  for (let i = 0; i < n; i++) {
+    const c = wrap360(course + (i - (n - 1) / 2) * ENEMY_TORPEDO.spread);
+    g.torpedoes.push({
+      id: g.nextId++, owner: 'enemy',
+      x: s.x + Math.sin(s.heading * DEG) * s.length / 2, y: s.y + Math.cos(s.heading * DEG) * s.length / 2,
+      heading: c, course: c, run: 0, trail: [], trailRun: 0, closest: 1e9,
+    });
+  }
+  s.ai.salvoT = ENEMY_TORPEDO.reload;
+  s.ai.state = 'evade';
+  s.ai.evadeT = 60;
+  s.ai.depthOrder = 50;
+  const d = dist2d(p.x, p.y, s.x, s.y);
+  if (p.alive && d < 5000) {
+    say(g, `TORPEDOES IN THE WATER! BEARING ${brg3(bearingTo(p.x, p.y, s.x, s.y))}`, 'red');
+    emit(g, 'enemyLaunch', { dist: d });
+  }
+}
+
+function playerHit(p, x, y) {
+  const h = p.heading * DEG;
+  const dx = x - p.x, dy = y - p.y;
+  const lz = dx * Math.sin(h) + dy * Math.cos(h);
+  const lx = dx * Math.cos(h) - dy * Math.sin(h);
+  return Math.abs(lz) < SUB.length / 2 && Math.abs(lx) < 4;
+}
+
+function stepEnemyTorpedo(g, t, dt) {
+  const p = g.player, ms = ENEMY_TORPEDO.speedKn * KN;
+  t.x += Math.sin(t.heading * DEG) * ms * dt;
+  t.y += Math.cos(t.heading * DEG) * ms * dt;
+  t.run += ms * dt;
+  t.trailRun += ms * dt;
+  if (t.trailRun > 14) {
+    t.trailRun = 0;
+    t.trail.push({ x: t.x, y: t.y, t: g.time });
+  }
+  while (t.trail.length && g.time - t.trail[0].t > 60) t.trail.shift();
+  const d = dist2d(p.x, p.y, t.x, t.y);
+  t.closest = Math.min(t.closest, d);
+  if (p.alive && p.depth < ENEMY_TORPEDO.hitDepth && playerHit(p, t.x, t.y)) {
+    t.done = true;
+    const dmg = ENEMY_TORPEDO.damage * g.diff.damage;
+    g.stats.torpedoHits++;
+    spawnExplosion(g, t.x, t.y, 1, false);
+    addCrack(g, 30);
+    addCrack(g, 20);
+    say(g, `TORPEDO HIT! HULL DAMAGE ${Math.round(Math.min(dmg, p.hull))}%`, 'red');
+    emit(g, 'torpedoHit', { damage: dmg });
+    damagePlayer(g, dmg, 'SUNK BY A TORPEDO');
+    return;
+  }
+  if (t.run > ENEMY_TORPEDO.range) {
+    t.done = true;
+    if (t.closest < 800 && p.alive) {
+      g.stats.torpedoesDodged++;
+      say(g, 'ENEMY TORPEDO RAN OUT', 'green');
+    }
+  }
+}
+
+function spawnPlane(g) {
+  const rng = g.rng, p = g.player;
+  const kind = rng() < 0.5 ? 'sunderland' : 'hudson';
+  const c = PLANE_CLASSES[kind];
+  const b = rng() * 360, d = 9000;
+  const x = p.x + Math.sin(b * DEG) * d, y = p.y + Math.cos(b * DEG) * d;
+  g.planes.push({
+    id: g.nextId++, kind, role: 'plane', cls: c.cls, name: c.cls,
+    x, y, alt: 300, heading: wrap360(b + 180 + rng.range(-30, 30)), speed: c.speedKn,
+    length: c.length, beam: c.length, state: 'patrol', contact: 0, detT: 0,
+    charges: c.charges, reported: false, target: null, run: 0, sinking: null,
+  });
+}
+
+function stepAir(g, dt) {
+  const air = g.air, p = g.player, rng = g.rng;
+  if (air.on && g.patrolState === 'active' && p.alive) {
+    air.nextT -= dt;
+    if (air.nextT <= 0) {
+      spawnPlane(g);
+      air.nextT = rng.range(300, 520);
+    }
+  }
+  for (const pl of g.planes) {
+    const ms = pl.speed * KN;
+    const d = dist2d(p.x, p.y, pl.x, pl.y);
+    if (pl.state === 'patrol') {
+      pl.detT -= dt;
+      if (pl.detT <= 0 && p.alive) {
+        pl.detT += 1;
+        let R = 0;
+        if (p.depth < SURFACED_DEPTH) R = 6000;
+        else if (p.depth <= PERISCOPE_MAX && p.periscopeRaise > 0.5) R = 300 + 150 * Math.abs(p.speed);
+        else if (p.depth < 25 && g.cond.time === 'day' && g.cond.sea !== 'storm') R = 250;
+        R *= g.cond.vis;
+        if (d < R) pl.contact += 1.5 * (1 - d / R) * g.diff.sense;
+        else pl.contact = Math.max(0, pl.contact - 0.1);
+        if (pl.contact > 0.6) {
+          pl.state = 'attack';
+          const err = p.depth > SURFACED_DEPTH ? 40 : 10;
+          pl.target = { x: p.x + rng.gauss() * err, y: p.y + rng.gauss() * err };
+          g.stats.airAttacks++;
+          emit(g, 'planeAttack', { dist: d });
+        }
+      }
+      if (!pl.reported && p.alive && p.depth < SURFACED_DEPTH + 0.5 && d < 7000 * g.cond.vis) {
+        pl.reported = true;
+        say(g, `AIRCRAFT BEARING ${brg3(bearingTo(p.x, p.y, pl.x, pl.y))}! DIVE!`, 'red');
+        emit(g, 'aircraft');
+      }
+      pl.alt = approach(pl.alt, 300, dt, 8);
+    } else if (pl.state === 'attack') {
+      // While the boat is in sight the pilot keeps adjusting the run; otherwise he aims at the swirl.
+      if (p.alive && (p.depth < SURFACED_DEPTH || (p.depth <= PERISCOPE_MAX && p.periscopeRaise > 0.5))) {
+        const lead = Math.min(d / ms, 40);
+        pl.target = { x: p.x + Math.sin(p.heading * DEG) * p.speed * KN * lead, y: p.y + Math.cos(p.heading * DEG) * p.speed * KN * lead };
+      }
+      const tg = pl.target;
+      const turn = 6 * dt;
+      pl.heading = wrap360(pl.heading + clamp(angleDiff(bearingTo(pl.x, pl.y, tg.x, tg.y), pl.heading), -turn, turn));
+      pl.alt = approach(pl.alt, 40, dt, 5);
+      if (dist2d(pl.x, pl.y, tg.x, tg.y) < 50) {
+        const k = pl.charges, h = pl.heading * DEG;
+        for (let i = 0; i < k; i++) {
+          const off = (i - (k - 1) / 2) * 30;
+          const cx = tg.x + Math.sin(h) * off, cy = tg.y + Math.cos(h) * off;
+          g.charges.push({ id: g.nextId++, x: cx, y: cy, depth: 0, target: rng.range(AIR_DC_DEPTH[0], AIR_DC_DEPTH[1]), aerial: true });
+          spawnGeyser(g, cx, cy, 8, 1.2);
+        }
+        pl.state = 'leave';
+        emit(g, 'planeDrop', { dist: d });
+        if (d < 1500) say(g, 'AIRCRAFT DEPTH CHARGES!', 'yellow');
+        for (const s of g.ships) {
+          if (s.role !== 'escort' || s.sinking) continue;
+          if (dist2d(s.x, s.y, tg.x, tg.y) > 12000) continue;
+          s.ai.lastKnown = { x: tg.x, y: tg.y };
+          s.ai.lastKnownT = g.time;
+          if (s.ai.state === 'escort') s.ai.state = 'hunt';
+        }
+      }
+    } else {
+      pl.alt = approach(pl.alt, 300, dt, 8);
+    }
+    pl.x += Math.sin(pl.heading * DEG) * ms * dt;
+    pl.y += Math.cos(pl.heading * DEG) * ms * dt;
+    pl.run += ms * dt;
+    if (pl.run > 4000 && d > 13000) pl.gone = true;
+  }
+  g.planes = g.planes.filter(pl => !pl.gone);
+}
+
+function stepMines(g, dt) {
+  const p = g.player;
+  if (!p.alive || !g.mines.length) return;
+  for (const m of g.mines) {
+    if (Math.abs(m.x - p.x) > MINE.radius + 40 || Math.abs(m.y - p.y) > MINE.radius + 40) continue;
+    if (!playerHit(p, m.x, m.y) && dist2d(m.x, m.y, p.x, p.y) > MINE.radius) continue;
+    if (Math.abs(p.depth - m.depth) > MINE.depthWindow) continue;
+    m.done = true;
+    const dmg = MINE.damage * g.diff.damage;
+    g.stats.minesHit++;
+    spawnGeyser(g, m.x, m.y, 35, 3.5);
+    addCrack(g, 30);
+    say(g, `MINE! HULL DAMAGE ${Math.round(Math.min(dmg, p.hull))}%`, 'red');
+    emit(g, 'mine', { damage: dmg });
+    damagePlayer(g, dmg, 'SUNK BY A MINE');
+  }
+  g.mines = g.mines.filter(m => !m.done);
 }
 
 /* =========================================================
@@ -1310,11 +1852,14 @@ function sonarSources(g) {
   const out = [];
   for (const s of g.ships) {
     const cls = SHIP_CLASSES[s.kind];
-    const loud = s.sinking ? 0.7 : cls.loud * (0.5 + s.speed / cls.maxSpeed);
-    out.push({ id: s.id, x: s.x, y: s.y, type: 'surface', loud });
+    const submerged = s.role === 'sub' && s.depth > 2;
+    const base = s.role === 'sub' && !submerged ? 0.6 : cls.loud;
+    const loud = s.sinking ? 0.7 : base * (0.5 + s.speed / cls.maxSpeed);
+    out.push({ id: s.id, x: s.x, y: s.y, type: submerged && !s.sinking ? 'sub' : 'surface', loud });
   }
   for (const t of g.torpedoes) out.push({ id: t.id, x: t.x, y: t.y, type: 'torpedo', loud: 0.5 });
   for (const c of g.charges) out.push({ id: c.id, x: c.x, y: c.y, type: 'charge', loud: 0.4 });
+  for (const m of g.mines) out.push({ id: m.id, x: m.x, y: m.y, type: 'mine', loud: 0.034 }); // silent: heard only very close
   return out;
 }
 
@@ -1324,7 +1869,7 @@ function updateSonar(g, dt) {
   so.sweep = wrap360(so.sweep + SONAR_SWEEP * dt);
   const swept = wrap360(so.sweep - prev);
   const sources = sonarSources(g);
-  let hearing = 12000;
+  let hearing = 12000 * g.cond.hear;
   if (Math.abs(p.speed) > 6) hearing *= 0.6;
   if (p.depth < SURFACED_DEPTH) hearing *= 0.6;
   for (const src of sources) {
@@ -1344,6 +1889,7 @@ function updateSonar(g, dt) {
     for (const src of sources) {
       const r = dist2d(p.x, p.y, src.x, src.y);
       if (r < r0 || r >= so.ping.r) continue;
+      if (src.type === 'mine' && r > 3000) continue;
       so.blips = so.blips.filter(x => x.id !== src.id || !x.active);
       so.blips.push({ id: src.id, x: src.x, y: src.y, type: src.type, t: g.realTime, active: true, fuzz: 0 });
       if (src.type === 'surface') emit(g, 'echo', { dist: r });
@@ -1351,6 +1897,17 @@ function updateSonar(g, dt) {
     if (so.ping.r > SONAR_RANGE) so.ping = null;
   }
   so.blips = so.blips.filter(b => g.realTime - b.t < (b.active ? ACTIVE_TTL : PASSIVE_TTL));
+
+  // Warning lamps.
+  const pv = { x: Math.sin(p.heading * DEG) * p.speed * KN, y: Math.cos(p.heading * DEG) * p.speed * KN };
+  g.warn.torpedo = p.alive && g.torpedoes.some(t => {
+    if (t.owner !== 'enemy') return false;
+    const dx = p.x - t.x, dy = p.y - t.y, d = Math.hypot(dx, dy);
+    const vx = Math.sin(t.heading * DEG) - pv.x / 23, vy = Math.cos(t.heading * DEG) - pv.y / 23;
+    return d < 3000 && dx * vx + dy * vy > 0;
+  });
+  g.warn.aircraft = p.alive && p.depth <= PERISCOPE_MAX && g.planes.some(pl => dist2d(p.x, p.y, pl.x, pl.y) < 6000);
+  g.warn.mines = p.alive && g.mines.some(m => Math.abs(m.x - p.x) < 600 && Math.abs(m.y - p.y) < 600);
 
   const was = g.detected;
   g.detected = g.player.alive && g.ships.some(s => s.ai && !s.sinking && s.ai.hasContact);
@@ -1533,17 +2090,21 @@ function seg3(c, cam, ax, ay, ah, bx, by, bh, seaClip) {
 }
 
 const TV = [0, 0, 0];
+let g_sea = null;                                   // sea state of the game being drawn (ships roll more in a storm)
 function drawShipModel(c, cam, s, color, alpha, width) {
   const model = MODELS[s.kind];
   const h = s.heading * DEG, sh = Math.sin(h), ch = Math.cos(h);
   const k = s.sinking;
   let sinkY = 0, pitch = 0, roll = 0, split = 0, brk = false;
+  if (s.role === 'sub') sinkY = s.depth * 0.8;              // at periscope depth only the periscope shows
+  else if (s.role === 'plane') { sinkY = -s.alt; roll = clamp(s.turn || 0, -0.6, 0.6); pitch = s.state === 'attack' && s.alt > 60 ? -0.15 : 0; }
+  else if (g_sea && !k) roll = Math.sin(performance.now() / 1000 * 0.8 + s.id) * 0.02 * g_sea.wave;
   if (k) {
     const f = clamp(k.t / k.dur, 0, 1), e = f * f;
-    if (k.mode === 'break') { brk = true; pitch = e * 0.7 + f * 0.1; sinkY = e * s.length * 0.4 + f * 4; split = f * 8; }
-    else if (k.mode === 'bow') { pitch = -(e * 1.0 + f * 0.08); sinkY = e * s.length * 0.45 + f * 3; }
-    else if (k.mode === 'stern') { pitch = e * 1.0 + f * 0.08; sinkY = e * s.length * 0.45 + f * 3; }
-    else { roll = k.side * (e * 1.6 + f * 0.2); sinkY = e * 25 + f * 3; }
+    if (k.mode === 'break') { brk = true; pitch = e * 0.7 + f * 0.1; sinkY += e * s.length * 0.4 + f * 4; split = f * 8; }
+    else if (k.mode === 'bow') { pitch = -(e * 1.0 + f * 0.08); sinkY += e * s.length * 0.45 + f * 3; }
+    else if (k.mode === 'stern') { pitch = e * 1.0 + f * 0.08; sinkY += e * s.length * 0.45 + f * 3; }
+    else { roll = k.side * (e * 1.6 + f * 0.2); sinkY += e * 25 + f * 3; }
   } else if (s.hp < s.maxHp) roll = 0.07;
   const cp = Math.cos(pitch), sp = Math.sin(pitch), cr = Math.cos(roll), sr = Math.sin(roll);
   const tv = (lx, ly, lz) => {
@@ -1565,7 +2126,20 @@ function drawShipModel(c, cam, s, color, alpha, width) {
   }
   stroke(c, color, width || LW * 1.3, alpha);
 
-  if (!k && s.speed > 1) {                                   // bow wave and wake
+  if (s.role === 'sub' && !k && s.depth > 2) {             // periscope feather
+    if (s.depth < PERISCOPE_MAX && s.speed > 1.5) {
+      const wl = clamp(s.speed * 6, 10, 60);
+      c.beginPath();
+      for (const side of [-1, 1]) {
+        tv(0, 0, 8.5); const ax = TV[0], ay = TV[1];
+        tv(side * wl * 0.3, 0, 8.5 - wl);
+        seg3(c, cam, ax, ay, 0, TV[0], TV[1], 0, false);
+      }
+      stroke(c, C.white, LW, alpha * 0.6);
+    }
+    return;
+  }
+  if (!k && s.speed > 1 && s.role !== 'plane') {             // bow wave and wake
     const L = s.length / 2, B = s.beam / 2, wl = clamp(s.speed * 11, 20, 320);
     c.beginPath();
     for (const side of [-1, 1]) {
@@ -1590,10 +2164,72 @@ function drawShipModel(c, cam, s, color, alpha, width) {
   }
 }
 
+/* ---------- sky: sun by day, low sun at dusk, moon and stars at night ---------- */
+function dirToScreen(cam, b, e) {
+  const rb = angleDiff(b, cam.yawDeg);
+  if (Math.abs(rb) > 80) return null;
+  return [cam.cx + Math.tan(rb * DEG) * cam.F, cam.cy - Math.tan(e * DEG) * cam.F / Math.cos(rb * DEG)];
+}
+
+function drawSky(c, cam, t, cond) {
+  const starShare = cond.time === 'night' ? 1 : cond.time === 'dusk' ? 0.3 : 0;
+  if (starShare && !cond.fog) {
+    c.beginPath();
+    const n = Math.floor(BG.stars.length * starShare);
+    for (let i = 0; i < n; i++) {
+      const [b, e, tw] = BG.stars[i];
+      const pt = dirToScreen(cam, b, e);
+      if (!pt) continue;
+      const s = 0.8 + (Math.sin(t * 2 + tw * 50) > 0.6 ? 0.8 : 0);
+      c.rect(pt[0], pt[1], s, s);
+    }
+    c.fillStyle = rgba('white', 0.7);
+    c.fill();
+  }
+  if (cond.time === 'night') {
+    const pt = dirToScreen(cam, BG.moon.b, BG.moon.e);
+    if (pt) {
+      const [mx, my] = pt, mr = Math.tan(BG.moon.r * DEG) * cam.F;
+      c.beginPath();
+      c.arc(mx, my, mr, 0, TAU);
+      c.moveTo(mx + mr * 0.15, my - mr * 0.97);
+      c.arc(mx - mr * 0.35, my, mr * 0.95, -1.4, 1.4, false);
+      c.moveTo(mx - mr * 0.3 + mr * 0.12, my - mr * 0.35);
+      c.arc(mx - mr * 0.3, my - mr * 0.35, mr * 0.12, 0, TAU);
+      stroke(c, C.white, LW, cond.fog ? 0.3 : 0.85);
+    }
+  } else {
+    const dusk = cond.time === 'dusk';
+    const pt = dirToScreen(cam, dusk ? 262 : 205, dusk ? 2.2 : 16);
+    if (pt) {
+      const [sx, sy] = pt, sr = Math.tan(1.6 * DEG) * cam.F;
+      c.beginPath();
+      c.arc(sx, sy, sr, 0, TAU);
+      if (!dusk) {
+        for (let i = 0; i < 12; i++) {
+          const a = (i / 12) * TAU + t * 0.05;
+          line(c, sx + Math.cos(a) * sr * 1.4, sy + Math.sin(a) * sr * 1.4, sx + Math.cos(a) * sr * 2.1, sy + Math.sin(a) * sr * 2.1);
+        }
+      }
+      stroke(c, dusk ? C.orange : C.yellow, LW * 1.2, cond.fog ? 0.3 : 0.8);
+    }
+  }
+  if (cond.fog) {                                           // haze bands near the horizon
+    c.beginPath();
+    for (let i = 1; i <= 6; i++) {
+      const y = cam.cy - i * cam.F * Math.tan(0.6 * DEG);
+      const off = Math.sin(t * 0.2 + i) * 40;
+      for (let x = cam.cx - cam.F; x < cam.cx + cam.F; x += 90) line(c, x + off, y, x + off + 50, y);
+    }
+    stroke(c, C.white, LW, 0.12);
+  }
+}
+
 /* ---------- periscope ---------- */
 function periscopeCamera(g, r) {
   const p = g.player, t = g.realTime;
-  const wave = 0.55 * Math.sin(t * 0.9) + 0.3 * Math.sin(t * 2.13 + 1.3) + 0.15 * Math.sin(t * 3.7);
+  const amp = g.cond.wave;
+  const wave = amp * (0.55 * Math.sin(t * 0.9) + 0.3 * Math.sin(t * 2.13 + 1.3) + 0.15 * Math.sin(t * 3.7));
   let eye;
   if (p.depth <= SURFACED_DEPTH) eye = 5.5 + wave * 0.4;
   else if (p.depth <= PERISCOPE_DEPTH) eye = 1.2 + (PERISCOPE_DEPTH - p.depth) * 0.35 + wave * 0.6;
@@ -1612,7 +2248,7 @@ function periscopeCamera(g, r) {
   const cam = makeCamera(p.x, p.y, eye, viewHeading(g), F, cx + jx, cy);
   cam.fov = fov;
   cam.eye = eye;
-  cam.roll = (p.depth <= SURFACED_DEPTH ? 1.8 : 0.7) * Math.sin(t * 0.7) * DEG;
+  cam.roll = (p.depth <= SURFACED_DEPTH ? 1.8 : 0.7) * amp * Math.sin(t * 0.7) * DEG;
   return cam;
 }
 
@@ -1624,31 +2260,9 @@ function drawSea(c, g, r, cam) {
   c.rotate(cam.roll);
   c.translate(-cam.cx, -cam.cy);
 
-  // stars and moon
-  c.beginPath();
-  for (const [b, e, tw] of BG.stars) {
-    const rb = angleDiff(b, cam.yawDeg);
-    if (Math.abs(rb) > cam.fov) continue;
-    const x = cam.cx + Math.tan(rb * DEG) * cam.F;
-    const y = cam.cy - Math.tan(e * DEG) * cam.F / Math.cos(rb * DEG);
-    const s = 0.8 + (Math.sin(t * 2 + tw * 50) > 0.6 ? 0.8 : 0);
-    c.rect(x, y, s, s);
-  }
-  c.fillStyle = rgba('white', 0.7);
-  c.fill();
-  const mb = angleDiff(BG.moon.b, cam.yawDeg);
-  if (Math.abs(mb) < cam.fov) {
-    const mx = cam.cx + Math.tan(mb * DEG) * cam.F;
-    const my = cam.cy - Math.tan(BG.moon.e * DEG) * cam.F;
-    const mr = Math.tan(BG.moon.r * DEG) * cam.F;
-    c.beginPath();
-    c.arc(mx, my, mr, 0, TAU);
-    c.moveTo(mx + mr * 0.15, my - mr * 0.97);
-    c.arc(mx - mr * 0.35, my, mr * 0.95, -1.4, 1.4, false);
-    c.moveTo(mx - mr * 0.3 + mr * 0.12, my - mr * 0.35);
-    c.arc(mx - mr * 0.3, my - mr * 0.35, mr * 0.12, 0, TAU);
-    stroke(c, C.white, LW, 0.85);
-  }
+  const cond = g.cond;
+  g_sea = cond;
+  drawSky(c, cam, t, cond);
 
   // coastline silhouettes on the horizon
   c.beginPath();
@@ -1660,7 +2274,7 @@ function drawSea(c, g, r, cam) {
       c.lineTo(cam.cx + Math.tan(b * DEG) * cam.F, cam.cy - Math.tan(pts[i + 1][1] * DEG) * cam.F);
     }
   }
-  stroke(c, C[INK], LW, 0.75);
+  stroke(c, C[INK], LW, cond.fog ? 0.12 : cond.time === 'night' ? 0.4 : 0.75);
 
   // horizon
   c.beginPath();
@@ -1685,8 +2299,8 @@ function drawSea(c, g, r, cam) {
       if (Math.abs(x) > z * tanHalf + 20) continue;
       const bob = Math.sin(t * 1.4 + h1 * 20);
       if (bob < -0.3) continue;
-      const len = (5 + h3 * 10) * (0.6 + bob * 0.4);
-      bands[z < 250 ? 0 : z < 700 ? 1 : 2].push(px - cdx * len / 2, py - cdy * len / 2, px + cdx * len / 2, py + cdy * len / 2, 0.2 * bob);
+      const len = (5 + h3 * 10) * (0.6 + bob * 0.4) * (0.5 + cond.wave * 0.5);
+      bands[z < 250 ? 0 : z < 700 ? 1 : 2].push(px - cdx * len / 2, py - cdy * len / 2, px + cdx * len / 2, py + cdy * len / 2, 0.2 * bob * cond.wave);
     }
   }
   const bandAlpha = [0.55, 0.35, 0.2];
@@ -1695,7 +2309,16 @@ function drawSea(c, g, r, cam) {
     if (!arr.length) continue;
     c.beginPath();
     for (let i = 0; i < arr.length; i += 5) seg3(c, cam, arr[i], arr[i + 1], arr[i + 4], arr[i + 2], arr[i + 3], arr[i + 4], false);
-    stroke(c, C[INK], LW, bandAlpha[b]);
+    stroke(c, C[INK], LW, bandAlpha[b] * (cond.time === 'night' ? 0.6 : 1));
+  }
+  if (cond.sea === 'storm') {                               // wind-blown spray
+    c.beginPath();
+    for (let i = 0; i < 40; i++) {
+      const x = cam.cx + (hash3(i, Math.floor(t * 3), 5) - 0.5) * cam.F * 1.6;
+      const y = cam.cy + hash3(i, Math.floor(t * 3), 6) * cam.F * 0.3;
+      line(c, x, y, x + 14, y - 3);
+    }
+    stroke(c, C.white, LW, 0.35);
   }
 
   // torpedo tracks
@@ -1708,25 +2331,56 @@ function drawSea(c, g, r, cam) {
       const s = clamp(cam.F / P.z * 1.5, 0.8, 4);
       c.rect(P.x - s / 2, P.y - s / 4, s, s / 2);
     }
-    c.fillStyle = rgba('white', 0.55);
+    const enemy = tp.owner === 'enemy';
+    c.fillStyle = enemy ? rgba('red', 0.8) : rgba('white', 0.55);
     c.fill();
     if (project(cam, tp.x, tp.y, 0)) {
       c.beginPath();
       c.arc(P.x, P.y, clamp(cam.F / P.z * 2, 1, 5), 0, TAU);
-      c.fillStyle = C.white;
+      c.fillStyle = enemy ? C.red : C.white;
       c.fill();
     }
   }
 
   // ships, far to near
-  const ships = g.ships
+  const vr = visualRange(g);
+  const ships = g.ships.concat(g.planes)
     .map(s => ({ s, d: dist2d(cam.x, cam.y, s.x, s.y) }))
-    .filter(o => o.d < VIEW.visualRange && Math.abs(angleDiff(bearingTo(cam.x, cam.y, o.s.x, o.s.y), cam.yawDeg)) < cam.fov / 2 + Math.atan2(o.s.length, o.d) / DEG + 3)
+    .filter(o => o.d < (o.s.role === 'plane' ? Math.max(vr, 3000) : vr) && Math.abs(angleDiff(bearingTo(cam.x, cam.y, o.s.x, o.s.y), cam.yawDeg)) < cam.fov / 2 + Math.atan2(o.s.length, o.d) / DEG + 3)
     .sort((a, b) => b.d - a.d);
   for (const { s, d } of ships) {
-    const alpha = d < 3000 ? 1 : lerp(1, 0.35, (d - 3000) / (VIEW.visualRange - 3000));
-    const color = s.ai && s.ai.hasContact && !s.sinking ? C.red : C[INK];
-    drawShipModel(c, cam, s, color, alpha);
+    const near = Math.min(3000, vr * 0.4);
+    const alpha = d < near ? 1 : lerp(1, 0.25, (d - near) / Math.max(1, vr - near));
+    const hostile = s.ai ? s.ai.hasContact && !s.sinking : s.role === 'plane' && s.state === 'attack';
+    drawShipModel(c, cam, s, hostile ? C.red : C[INK], alpha);
+  }
+
+  // searchlights: escorts that have us, after dark
+  if (cond.time !== 'day') {
+    for (const s of g.ships) {
+      if (s.role !== 'escort' || s.sinking || !s.ai.hasContact) continue;
+      const d = dist2d(s.x, s.y, p.x, p.y);
+      if (d > 4000) continue;
+      const sweep = Math.sin(t * 0.7 + s.id) * 120;
+      const b = bearingTo(s.x, s.y, p.x, p.y) * DEG;
+      if (!project(cam, s.x, s.y, 10)) continue;
+      const sx = P.x, sy = P.y;
+      // The beam ends on the water near us; when that point is behind the periscope, end it short.
+      let a1 = null, a2 = null;
+      for (const f of [1, 0.85, 0.7, 0.5]) {
+        const tx = s.x + (p.x + Math.cos(b) * sweep - s.x) * f, ty = s.y + (p.y - Math.sin(b) * sweep - s.y) * f;
+        const w = 40 * f, lx = Math.cos(b) * w, ly = -Math.sin(b) * w;
+        a1 = project(cam, tx - lx, ty - ly, 0) ? [P.x, P.y] : null;
+        a2 = project(cam, tx + lx, ty + ly, 0) ? [P.x, P.y] : null;
+        if (a1 && a2) break;
+      }
+      if (!a1 || !a2) continue;
+      c.beginPath();
+      c.moveTo(sx, sy); c.lineTo(a1[0], a1[1]); c.lineTo(a2[0], a2[1]); c.closePath();
+      c.fillStyle = rgba('yellow', 0.08);
+      c.fill();
+      stroke(c, C.yellow, LW, 0.5);
+    }
   }
 
   drawEffects(c, g, cam);
@@ -1872,6 +2526,31 @@ function drawUnderwater(c, g, r, cam) {
   }
   c.fillStyle = rgba('green', 0.5);
   c.fill();
+  // moored mines: a sphere with horns on a cable
+  for (const m of g.mines) {
+    if (Math.abs(m.x - p.x) > 300 || Math.abs(m.y - p.y) > 300) continue;
+    if (!project(cam2, m.x, m.y, -m.depth)) continue;
+    const s = clamp(cam.F / P.z * 1.2, 2, 40);
+    c.beginPath();
+    c.arc(P.x, P.y, s, 0, TAU);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * TAU;
+      line(c, P.x + Math.cos(a) * s, P.y + Math.sin(a) * s, P.x + Math.cos(a) * s * 1.45, P.y + Math.sin(a) * s * 1.45);
+    }
+    const mx = P.x, my = P.y;
+    if (project(cam2, m.x, m.y, -m.depth - 60)) line(c, mx, my + s, P.x, P.y);
+    stroke(c, C.orange, LW * 1.3, clamp(1.3 - P.z / 300, 0.2, 1));
+  }
+  // enemy torpedoes running shallow overhead
+  for (const tp of g.torpedoes) {
+    if (tp.owner !== 'enemy' || !project(cam2, tp.x, tp.y, -4)) continue;
+    if (P.z > 500) continue;
+    const s = clamp(cam.F / P.z * 1.2, 3, 50);
+    c.beginPath();
+    line(c, P.x - s, P.y, P.x + s, P.y);
+    line(c, P.x - s, P.y - s * 0.15, P.x - s, P.y + s * 0.15);
+    stroke(c, C.red, LW * 2);
+  }
   // depth charges sinking nearby: a very bad sign
   for (const ch of g.charges) {
     if (!project(cam2, ch.x, ch.y, -ch.depth)) continue;
@@ -2097,7 +2776,7 @@ function drawBottom(c, g, r) {
     zones: [{ from: SAFE_DEPTH, to: CRUSH_DEPTH, color: 'red' }, { from: CRUSH_DEPTH, to: 300, color: 'red' }, { from: THERMOCLINE - 3, to: THERMOCLINE + 3, color: 'blue' }],
     needles: [{ v: p.orderedDepth, color: 'yellow', len: 0.95, width: LW * 1.2 }, { v: p.depth, color: p.depth > SAFE_DEPTH ? 'red' : INK, len: 0.85 }],
   });
-  slotTitle(c, s, 'DEPTH M', `${Math.round(p.depth)} / ${p.orderedDepth}`, p.depth > SAFE_DEPTH ? C.red : undefined);
+  slotTitle(c, s, 'DEPTH M', `${Math.round(p.depth)} / ${Math.round(p.orderedDepth)}`, p.depth > SAFE_DEPTH ? C.red : undefined);
 
   // speed
   s = slots[1];
@@ -2203,7 +2882,10 @@ function lamp(c, x, y, w, h, label, on, color, blink) {
   c.rect(x, y, w, h);
   if (lit) { c.fillStyle = rgba(color, 0.8); c.fill(); }
   stroke(c, lit ? C[color] : C[INK], lit ? LW * 1.5 : LW, lit ? 1 : 0.3);
-  text(c, label, x + w / 2, y + h / 2 + 1, lit ? '#000' : rgba(INK, 0.3), FS * 0.68, 'center');
+  c.font = font(FS * 0.68, true);
+  const tw = c.measureText(label).width;
+  const size = tw > w - 4 ? FS * 0.68 * (w - 4) / tw : FS * 0.68;
+  text(c, label, x + w / 2, y + h / 2 + 1, lit ? '#000' : rgba(INK, 0.3), size, 'center');
 }
 
 function drawSonar(c, g, cx, cy, R) {
@@ -2252,7 +2934,7 @@ function drawSonar(c, g, cx, cy, R) {
     stroke(c, C.white, LW * 1.5, 1 - so.ping.r / SONAR_RANGE * 0.7);
   }
   // blips
-  const colors = { surface: INK, torpedo: 'red', charge: 'yellow', sub: 'blue' };
+  const colors = { surface: INK, torpedo: 'red', charge: 'yellow', sub: 'blue', mine: 'orange' };
   for (const b of so.blips) {
     const age = g.realTime - b.t, ttl = b.active ? ACTIVE_TTL : PASSIVE_TTL;
     const a = clamp(1 - age / ttl, 0, 1);
@@ -2264,6 +2946,14 @@ function drawSonar(c, g, cx, cy, R) {
       c.beginPath();
       line(c, cx + Math.cos(ang) * R * 0.9, cy + Math.sin(ang) * R * 0.9, cx + Math.cos(ang) * R, cy + Math.sin(ang) * R);
       stroke(c, C[col], LW * 3, a);
+      continue;
+    }
+    if (b.type === 'mine') {
+      const m = Math.max(2.5, FS * 0.22);
+      c.beginPath();
+      line(c, x - m, y - m, x + m, y + m);
+      line(c, x - m, y + m, x + m, y - m);
+      stroke(c, C.orange, LW, a);
       continue;
     }
     const s = b.active ? Math.max(3, FS * 0.3) : Math.max(2.5, FS * 0.25) + b.fuzz * k * 0.5;
@@ -2356,13 +3046,17 @@ function drawRight(c, g, r) {
     ['BATT LOW', p.battery < 25, p.battery < 10 ? 'red' : 'yellow', p.battery < 10],
     ['HULL CRIT', p.hull < 30, 'red', true],
     ['DEPTH CRIT', p.depth > SAFE_DEPTH, 'red', true],
+    ['TORPEDO', g.warn.torpedo, 'red', true],
+    ['AIRCRAFT', g.warn.aircraft, 'red', true],
+    ['MINES', g.warn.mines, 'orange', true],
+    ['NIGHT', g.cond.time === 'night', 'blue'],
   ];
-  const lw = (r.w - pad * 2 - 2 * 6) / 3, lhh = FS * 1.5;
+  const lw = (r.w - pad * 2 - 3 * 5) / 4, lhh = FS * 1.45;
   lamps.forEach((l, i) => {
-    const col = i % 3, row = Math.floor(i / 3);
-    lamp(c, r.x + pad + col * (lw + 6), y + row * (lhh + 5), lw, lhh, l[0], l[1], l[2], l[3]);
+    const col = i % 4, row = Math.floor(i / 4);
+    lamp(c, r.x + pad + col * (lw + 5), y + row * (lhh + 4), lw, lhh, l[0], l[1], l[2], l[3]);
   });
-  y += 4 * (lhh + 5) + lh * 0.5;
+  y += 4 * (lhh + 4) + lh * 0.5;
 
   // torpedo data computer
   c.beginPath(); line(c, r.x + pad, y, r.x + r.w - pad, y); stroke(c, C[INK], LW, 0.3);
@@ -2403,9 +3097,16 @@ function drawRight(c, g, r) {
 
   // score
   const sy = r.y + r.h - lh * 1.1;
-  c.beginPath(); line(c, r.x + pad, sy - lh * 0.9, r.x + r.w - pad, sy - lh * 0.9); stroke(c, C[INK], LW, 0.3);
-  text(c, `PATROL ${g.patrol} · ${g.diff.name}`, r.x + pad, sy, C[INK], FS * 0.85);
-  text(c, `${fmtInt(g.stats.tonnage)} GRT`, r.x + r.w - pad, sy, C.yellow, FS, 'right');
+  c.beginPath(); line(c, r.x + pad, sy - lh * 2.9, r.x + r.w - pad, sy - lh * 2.9); stroke(c, C[INK], LW, 0.3);
+  const fitText = (str, yy, color, size) => {
+    c.font = font(size, true);
+    const w = c.measureText(str).width, max = r.w - pad * 2;
+    text(c, str, r.x + pad, yy, color, w > max ? size * max / w : size);
+  };
+  fitText(`PATROL ${g.patrol} · ${g.mission.name}`, sy - lh * 2.1, C[INK], FS * 0.85);
+  fitText(missionStatus(g), sy - lh * 1.05, C.yellow, FS * 0.8);
+  text(c, conditionsText(g.cond), r.x + pad, sy, rgba(INK, 0.75), FS * 0.72);
+  text(c, `${fmtInt(score(g))}`, r.x + r.w - pad, sy, C.yellow, FS, 'right');
 }
 
 const COMMAND_LINE = 'W/S ENGINE · A/D RUDDER · R/F DEPTH · C CRASH DIVE · P SCOPE · ←/→ TRAIN · ↑/↓ POWER · T LOCK · SPACE FIRE · 1-5 TUBE · TAB PING · X SILENT · H HELP · I STATS · ESC PAUSE';
@@ -2445,6 +3146,7 @@ const HELP_KEYS = [
   ['X', 'Silent running'],
   ['H / I', 'This help / patrol statistics'],
   ['M / G', 'Sound on-off / CRT glow effects'],
+  ['ENTER', 'Accept the orders of a new patrol'],
   ['ESC', 'Pause'],
 ];
 const HELP_TIPS = [
@@ -2455,7 +3157,11 @@ const HELP_TIPS = [
   'Surfaced, the diesels are fast and recharge the battery and the air, but escorts see you from far away and open fire.',
   'Escorts hear speed, diesels, crash dives, launches and your own pings. SILENT running helps. Below the thermocline (90 m) their sonar is weak.',
   'Depth charges sink at about 3 m/s: change depth and turn hard when you hear them. Below 220 m the hull suffers; at 280 m it collapses.',
-  'Sonar: green ship · red torpedo · yellow depth charge. Passive blips are approximate; a ping is exact but tells everyone where you are.',
+  'Sonar: green ship · blue submarine · red torpedo · yellow depth charge · orange × mine. Passive blips are approximate; a ping is exact but tells everyone where you are.',
+  'Enemy submarine torpedoes run shallow: deeper than 18 m they pass overhead. Ours only hit a submarine at periscope depth or surfaced.',
+  'Aircraft spot a surfaced boat from far away and a periscope from close. When the lookouts shout AIRCRAFT, crash dive (C): their charges are set shallow and cannot reach 60 m.',
+  'Mines are moored 4-35 m deep: pass deeper, or find the swept channel with a ping. Night and fog hide you, but also hide them.',
+  'The full manual (MANUAL.md) explains every instrument and rule.',
 ];
 
 function wrapText(c, str, maxW, size) {
@@ -2484,11 +3190,19 @@ function drawHelp(c) {
     y += fs * 1.6;
   }
   const x1 = r.x + r.w * 0.5, tw = r.w * 0.47;
+  // Shrink the tips until they fit above the bottom line.
+  const avail = r.h - fs * 7.5;
+  let ts = fs * 0.92, wrapped;
+  for (;;) {
+    wrapped = HELP_TIPS.map(tip => wrapText(c, tip, tw, ts));
+    const hgt = wrapped.reduce((a, l) => a + l.length * ts * 1.4 + ts * 0.6, 0);
+    if (hgt <= avail || ts < 7) break;
+    ts *= 0.94;
+  }
   y = r.y + fs * 4.5;
-  for (const tip of HELP_TIPS) {
-    const lines = wrapText(c, tip, tw, fs * 0.92);
-    lines.forEach((l, i) => text(c, (i === 0 ? '▸ ' : '  ') + l, x1, y + i * fs * 1.3, C[INK], fs * 0.92));
-    y += lines.length * fs * 1.3 + fs * 0.6;
+  for (const lines of wrapped) {
+    lines.forEach((l, i) => text(c, (i === 0 ? '▸ ' : '  ') + l, x1, y + i * ts * 1.4, C[INK], ts));
+    y += lines.length * ts * 1.4 + ts * 0.6;
   }
   text(c, 'PRESS H OR ESC TO RETURN', r.x + r.w / 2, r.y + r.h - fs * 1.5, rgba(INK, 0.7), fs, 'center');
 }
@@ -2496,17 +3210,18 @@ function drawHelp(c) {
 function statsLines(g) {
   const st = g.stats, sk = st.sunk;
   const acc = st.fired ? Math.round((st.hits / st.fired) * 100) : 0;
-  const ships = sk.freighter + sk.tanker + sk.corvette + sk.destroyer;
+  const ships = sk.freighter + sk.tanker + sk.corvette + sk.destroyer + sk.tclass;
   const sub = Math.round(st.timeSubmerged / 60);
   return [
-    ['TONNAGE SUNK', `${fmtInt(st.tonnage)} GRT`],
-    ['SHIPS SUNK', `${ships}  (FREIGHTERS ${sk.freighter} · TANKERS ${sk.tanker} · CORVETTES ${sk.corvette} · DESTROYERS ${sk.destroyer})`],
+    ['SCORE', `${fmtInt(score(g))}  (TONNAGE ${fmtInt(st.tonnage)} + BONUS ${fmtInt(st.bonus)})`],
+    ['SHIPS SUNK', `${ships}  (FREIGHTERS ${sk.freighter} · TANKERS ${sk.tanker} · CORVETTES ${sk.corvette} · DESTROYERS ${sk.destroyer} · SUBS ${sk.tclass})`],
     ['TORPEDOES', `FIRED ${st.fired} · HITS ${st.hits} · DUDS ${st.duds} · MISSED ${st.misses} · ACCURACY ${acc}%`],
-    ['DEPTH CHARGES', `${st.chargesNear} EXPLODED CLOSE · ${Math.round(st.damageTaken)}% HULL DAMAGE TAKEN`],
+    ['DEPTH CHARGES', `${st.chargesNear} EXPLODED CLOSE · ${st.airAttacks} AIR ATTACKS`],
+    ['HITS TAKEN', `${st.torpedoHits} TORPEDOES · ${st.minesHit} MINES · ${st.torpedoesDodged} TORPEDOES DODGED · ${Math.round(st.damageTaken)}% DAMAGE`],
     ['DEEPEST DIVE', `${Math.round(st.maxDepth)} M`],
     ['TIME SUBMERGED', `${Math.floor(sub / 60)} H ${String(sub % 60).padStart(2, '0')} MIN (GAME TIME)`],
     ['ACTIVE PINGS', `${st.pings}`],
-    ['PATROLS', `${g.patrol} STARTED · ${st.convoysDestroyed} CONVOYS DESTROYED`],
+    ['PATROLS', `${g.patrol} STARTED · ${st.missionsWon} MISSIONS ACCOMPLISHED`],
     ['DIFFICULTY', g.diff.name],
   ];
 }
@@ -2518,7 +3233,7 @@ function drawScores(c, x, y, fs, highlight) {
   if (!scores.length) text(c, 'NONE YET', x, y, rgba(INK, 0.6), fs);
   scores.forEach((s, i) => {
     const col = i === highlight ? C.yellow : C[INK];
-    text(c, `${i + 1}. ${fmtInt(s.grt).padStart(8, ' ')} GRT  PATROL ${s.patrol}  ${s.diff}  ${s.date}`, x, y, col, fs);
+    text(c, `${i + 1}. ${fmtInt(s.score !== undefined ? s.score : s.grt).padStart(8, ' ')}  PATROL ${s.patrol}  ${s.diff}  ${s.date}`, x, y, col, fs);
     y += fs * 1.35;
   });
 }
@@ -2537,6 +3252,29 @@ function drawStats(c, g, title, extra) {
   }
   drawScores(c, r.x + fs * 2, y + fs, fs, g.scoreRank);
   text(c, mode === 'over' ? 'ENTER: NEW PATROL · ESC: TITLE' : 'PRESS I OR ESC TO RETURN', r.x + r.w / 2, r.y + r.h - fs * 1.5, rgba(INK, 0.7), fs, 'center');
+}
+
+function drawBriefing(c, g) {
+  const b = g.briefing;
+  if (!b) return;
+  const pw = Math.min(W * 0.8, 980), ph = Math.min(H * 0.7, 520);
+  const r = panel(c, pw, ph);
+  const fs = clamp(Math.min(ph / 26, pw / 60), 10, 18);
+  text(c, 'ORDERS FROM U-BOAT COMMAND', r.x + r.w / 2, r.y + fs * 2, rgba(INK, 0.7), fs * 0.9, 'center');
+  text(c, b.title, r.x + r.w / 2, r.y + fs * 3.7, C.yellow, fs * 1.4, 'center');
+  let y = r.y + fs * 6;
+  const x = r.x + fs * 2, w = r.w - fs * 4;
+  const block = (label, str, color) => {
+    text(c, label, x, y, C.yellow, fs * 0.85);
+    y += fs * 1.4;
+    for (const l of wrapText(c, str, w, fs)) { text(c, l, x, y, color || C[INK], fs); y += fs * 1.35; }
+    y += fs * 0.6;
+  };
+  block('ORDERS', b.orders);
+  block('INTELLIGENCE', b.intel);
+  block('CONDITIONS', `${b.conditions}. ${b.air}`, rgba(INK, 0.85));
+  const blink = Math.sin(performance.now() / 250) > -0.3;
+  if (blink) text(c, 'ENTER: ACCEPT ORDERS', r.x + r.w / 2, r.y + r.h - fs * 1.6, C[INK], fs, 'center');
 }
 
 function drawPause(c) {
@@ -2665,7 +3403,25 @@ function handleEvents(g) {
       case 'detected': Sound.alarm(); break;
       case 'periscope': Sound.periscope(); break;
       case 'chargesAway': break;
-      case 'patrol': if (g.patrol > 1) Sound.ping(0.25, 660); break;
+      case 'patrol':
+        if (g.patrol > 1) Sound.ping(0.25, 660);
+        if (mode === 'play') overlay = 'briefing';
+        break;
+      case 'enemyLaunch': Sound.launch(clamp(1 - e.dist / 5000, 0.15, 0.6)); Sound.alarm(); break;
+      case 'torpedoHit':
+        Sound.boom(1, true);
+        addShake(28, 1.6, 40);
+        addShake(14, 2.5, 6);
+        flash('255,59,48', 0.7);
+        break;
+      case 'mine':
+        Sound.charge(1);
+        addShake(26, 1.5, 40);
+        flash('255,154,42', 0.6);
+        break;
+      case 'aircraft': Sound.alarm(); break;
+      case 'planeAttack': break;
+      case 'planeDrop': Sound.splash(clamp(1 - e.dist / 2000, 0.1, 0.6)); break;
       case 'patrolEnd': break;
       case 'destroyed':
         Sound.boom(1, true);
@@ -2712,7 +3468,24 @@ const Sound = {
     const chG = ac.createGain(); chG.gain.value = 0;
     chSrc.connect(chF).connect(chAm).connect(chG).connect(this.master);
     lfo.start();
-    this.amb = { engF, engG, chG, lfo };
+    // aircraft engine drone
+    const drone = ac.createOscillator(); drone.type = 'sawtooth'; drone.frequency.value = 85;
+    const drone2 = ac.createOscillator(); drone2.type = 'sawtooth'; drone2.frequency.value = 88;
+    const dF = ac.createBiquadFilter(); dF.type = 'lowpass'; dF.frequency.value = 400;
+    const dG = ac.createGain(); dG.gain.value = 0;
+    drone.connect(dF); drone2.connect(dF); dF.connect(dG).connect(this.master);
+    drone.start(); drone2.start();
+    // enemy torpedo propeller whine
+    const whine = ac.createOscillator(); whine.type = 'triangle'; whine.frequency.value = 1900;
+    const wG = ac.createGain(); wG.gain.value = 0;
+    whine.connect(wG).connect(this.master);
+    whine.start();
+    // storm wind
+    const wind = this.noiseSrc(true);
+    const wiF = ac.createBiquadFilter(); wiF.type = 'bandpass'; wiF.frequency.value = 700; wiF.Q.value = 0.6;
+    const wiG = ac.createGain(); wiG.gain.value = 0;
+    wind.connect(wiF).connect(wiG).connect(this.master);
+    this.amb = { engF, engG, chG, lfo, dG, drone, wG, whine, wiG, wiF };
   },
   toggle() {
     this.enabled = !this.enabled;
@@ -2778,17 +3551,18 @@ const Sound = {
       m.start(t); m.stop(t + 1.5);
     }
   },
-  launch() {
+  launch(vol) {
     if (!this.ok()) return;
+    vol = vol === undefined ? 1 : vol;
     const ac = this.ac, t = ac.currentTime;
     const o = ac.createOscillator(); o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(35, t + 0.35);
-    const og = ac.createGain(); this.env(og, t, 0.005, 0.8, 0.4);
+    const og = ac.createGain(); this.env(og, t, 0.005, 0.8 * vol, 0.4);
     o.connect(og).connect(this.master);
     o.start(t); o.stop(t + 0.6);
     const n = this.noiseSrc(false);
     const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.8;
     bp.frequency.setValueAtTime(1400, t); bp.frequency.exponentialRampToValueAtTime(200, t + 1.4);
-    const g = ac.createGain(); this.env(g, t, 0.02, 0.5, 1.4);
+    const g = ac.createGain(); this.env(g, t, 0.02, 0.5 * vol, 1.4);
     n.connect(bp).connect(g).connect(this.master);
     n.start(t); n.stop(t + 2);
   },
@@ -2878,9 +3652,19 @@ const Sound = {
   update(g) {
     if (!this.ac || !this.amb) return;
     const t = this.ac.currentTime;
-    let eng = 0, engF = 120, churn = 0, rate = 5;
+    let eng = 0, engF = 120, churn = 0, rate = 5, droneV = 0, whineV = 0, windV = 0;
     if (g && mode === 'play' && !overlay && g.player.alive) {
       const p = g.player;
+      for (const pl of g.planes) {
+        const d = dist2d(p.x, p.y, pl.x, pl.y);
+        if (d < 5000) droneV = Math.max(droneV, 0.12 * (1 - d / 5000) ** 1.5 * (p.depth > PERISCOPE_MAX ? 0.25 : 1));
+      }
+      for (const tp of g.torpedoes) {
+        if (tp.owner !== 'enemy') continue;
+        const d = dist2d(p.x, p.y, tp.x, tp.y);
+        if (d < 3000) whineV = Math.max(whineV, 0.05 * (1 - d / 3000) ** 2);
+      }
+      if (g.cond.sea === 'storm') windV = p.depth <= PERISCOPE_MAX ? (p.depth < SURFACED_DEPTH ? 0.12 : 0.05) : 0.01;
       const surf = p.depth <= SURFACED_DEPTH;
       eng = surf ? 0.08 + Math.abs(p.speed) / 17 * 0.12 : Math.abs(p.speed) / 7.6 * 0.05;
       engF = surf ? 90 + Math.abs(p.speed) * 6 : 300 + Math.abs(p.speed) * 40;
@@ -2899,6 +3683,11 @@ const Sound = {
     this.amb.engF.frequency.setTargetAtTime(engF, t, 0.3);
     this.amb.chG.gain.setTargetAtTime(churn, t, 0.4);
     this.amb.lfo.frequency.setTargetAtTime(rate, t, 0.5);
+    this.amb.dG.gain.setTargetAtTime(droneV, t, 0.3);
+    this.amb.wG.gain.setTargetAtTime(whineV, t, 0.2);
+    this.amb.whine.frequency.setTargetAtTime(1800 + whineV * 6000, t, 0.2);
+    this.amb.wiG.gain.setTargetAtTime(windV, t, 0.8);
+    this.amb.wiF.frequency.setTargetAtTime(500 + Math.sin(t * 0.7) * 250, t, 0.5);
   },
 };
 
@@ -2915,9 +3704,10 @@ function loadScores() {
 
 function saveScore(g) {
   const list = loadScores();
-  const entry = { grt: g.stats.tonnage, patrol: g.patrol, diff: g.diff.name, date: new Date().toISOString().slice(0, 10), id: Date.now() };
+  const entry = { score: score(g), grt: g.stats.tonnage, patrol: g.patrol, diff: g.diff.name, date: new Date().toISOString().slice(0, 10), id: Date.now() };
   list.push(entry);
-  list.sort((a, b) => b.grt - a.grt);
+  const val = e => (e.score !== undefined ? e.score : e.grt);
+  list.sort((a, b) => val(b) - val(a));
   const top = list.slice(0, 5);
   g.scoreRank = top.findIndex(s => s.id === entry.id);
   try { window.localStorage.setItem(SCORE_KEY, JSON.stringify(top)); } catch (e) { /* storage unavailable */ }
@@ -2959,6 +3749,10 @@ function onKeyDown(e) {
   }
   // playing
   if (overlay) {
+    if (overlay === 'briefing') {
+      if (code === 'Enter' || code === 'Escape') overlay = null;
+      return;
+    }
     if (overlay === 'pause' && code === 'KeyQ') {
       game.state = 'lost';
       game.lostReason = 'PATROL ABANDONED';
@@ -3018,7 +3812,8 @@ function render(dt) {
     drawCommandLine(c, LAYOUT.cmd);
   }
   c.restore();
-  if (overlay === 'help') drawHelp(c);
+  if (overlay === 'briefing' && game) drawBriefing(c, game);
+  else if (overlay === 'help') drawHelp(c);
   else if (overlay === 'stats' && game) drawStats(c, game, `PATROL REPORT · PATROL ${game.patrol}`);
   else if (overlay === 'pause') drawPause(c);
   if (mode === 'over' && game) drawStats(c, game, `U-BOOT LOST · ${game.lostReason}`, game.scoreRank >= 0 ? `NEW HIGH SCORE: #${game.scoreRank + 1}` : '');

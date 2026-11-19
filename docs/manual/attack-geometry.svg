@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 540" width="820" height="540" font-family="Courier New, monospace" font-weight="bold">
+  <defs>
+    <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#39ff14"/>
+    </marker>
+    <marker id="arrowW" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#eaffdf"/>
+    </marker>
+    <marker id="arrowY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#ffe14a"/>
+    </marker>
+  </defs>
+  <rect width="820" height="540" fill="#000"/>
+  <text x="20" y="34" fill="#39ff14" font-size="18">ATTACK GEOMETRY (SEEN FROM ABOVE)</text>
+
+  <!-- north arrow -->
+  <line x1="770" y1="110" x2="770" y2="50" stroke="#39ff14" stroke-width="2" marker-end="url(#arrowG)"/>
+  <text x="764" y="40" fill="#ff3b30" font-size="16">N</text>
+
+  <!-- target: observed position, course and future position -->
+  <path d="M300,170 L370,170 L388,178 L370,186 L300,186 Z" fill="none" stroke="#39ff14" stroke-width="2"/>
+  <line x1="320" y1="170" x2="320" y2="160" stroke="#39ff14" stroke-width="2"/>
+  <line x1="352" y1="170" x2="352" y2="158" stroke="#39ff14" stroke-width="2"/>
+  <text x="270" y="150" fill="#39ff14" font-size="13">TARGET WHEN OBSERVED</text>
+  <line x1="392" y1="178" x2="590" y2="178" stroke="#39ff14" stroke-width="2" stroke-dasharray="8 6" marker-end="url(#arrowG)"/>
+  <text x="420" y="168" fill="#39ff14" font-size="13">TARGET COURSE AND SPEED</text>
+  <path d="M600,170 L670,170 L688,178 L670,186 L600,186 Z" fill="none" stroke="#ffe14a" stroke-width="2" stroke-dasharray="4 3"/>
+  <text x="570" y="212" fill="#ffe14a" font-size="13">WHERE IT WILL BE</text>
+  <circle cx="640" cy="178" r="5" fill="#ffe14a"/>
+
+  <!-- the U-boat -->
+  <path d="M135,470 L150,420 L165,470 L158,488 L142,488 Z" fill="none" stroke="#39ff14" stroke-width="2"/>
+  <text x="70" y="512" fill="#39ff14" font-size="13">YOUR U-BOAT</text>
+
+  <!-- line of sight -->
+  <line x1="150" y1="430" x2="338" y2="178" stroke="#39ff14" stroke-width="1.5" stroke-dasharray="3 5"/>
+  <text x="152" y="318" fill="#39ff14" font-size="13" transform="rotate(-53 152 318)">LINE OF SIGHT · BEARING</text>
+
+  <!-- torpedo track -->
+  <line x1="150" y1="430" x2="636" y2="182" stroke="#eaffdf" stroke-width="2" stroke-dasharray="2 6" marker-end="url(#arrowW)"/>
+  <text x="330" y="372" fill="#eaffdf" font-size="13" transform="rotate(-27 330 372)">TORPEDO RUN · GYRO COURSE</text>
+
+  <!-- lead angle arc at the U-boat -->
+  <path d="M209,352 A100,100 0 0 0 238,385" fill="none" stroke="#ffe14a" stroke-width="2.5"/>
+  <text x="86" y="380" fill="#ffe14a" font-size="14">LEAD ANGLE</text>
+
+  <!-- angle on the bow at the target -->
+  <path d="M378,178 A40,40 0 0 1 314,213" fill="none" stroke="#3aa8ff" stroke-width="2.5"/>
+  <text x="360" y="240" fill="#3aa8ff" font-size="14">AOB</text>
+
+  <!-- track angle at the hit point -->
+  <path d="M600,178 A40,40 0 0 0 604,197" fill="none" stroke="#ff9a2a" stroke-width="2.5"/>
+  <text x="646" y="232" fill="#ff9a2a" font-size="13">TRACK ANGLE</text>
+
+  <!-- legend -->
+  <g font-size="13">
+    <text x="480" y="334" fill="#39ff14">BEARING: direction of the target from you</text>
+    <text x="480" y="356" fill="#ffe14a">LEAD: how far ahead of it to aim</text>
+    <text x="480" y="378" fill="#3aa8ff">AOB: angle on the bow, how the</text>
+    <text x="480" y="396" fill="#3aa8ff">     target shows its side to you</text>
+    <text x="480" y="418" fill="#ff9a2a">TRACK ANGLE: near 90° is best;</text>
+    <text x="480" y="436" fill="#ff9a2a">     a bow or stern shot is thin</text>
+    <text x="480" y="464" fill="#eaffdf">The torpedo runs straight on the</text>
+    <text x="480" y="482" fill="#eaffdf">gyro course and does not steer</text>
+    <text x="480" y="500" fill="#eaffdf">towards the target.</text>
+  </g>
+</svg>

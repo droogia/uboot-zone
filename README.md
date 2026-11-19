@@ -8,6 +8,11 @@ gauges and lamps.
 Open `uboot-zone.html` in a browser and play. Everything runs locally; nothing is
 downloaded and nothing is uploaded.
 
+The **[Commander's Manual](MANUAL.md)** explains every instrument, the game dynamics and the
+tactics, with screenshots and diagrams.
+
+![The control room](docs/manual/overview.png)
+
 It is an arcade game, not a simulation. Time runs four times faster than real time,
 and the physics is simplified, but the boat still behaves like a big vessel: it
 accelerates, turns and dives slowly.
@@ -20,8 +25,9 @@ accelerates, turns and dives slowly.
 | Bottom row | Depth gauge (yellow = ordered depth, blue = thermocline, red = danger), speed, engine telegraph, compass (yellow = periscope bearing), helm (rudder and dive planes), battery, air and hull |
 | Sonar | Round scope with the rotating beam, north up. White = own heading, dotted yellow = periscope bearing |
 | Tubes | Five lamps: green ready, yellow reloading, red empty. Gyro course, arc and depth checks |
-| Lamps | Surfaced, periscope, silent, detected, enemy ASDIC, diesel, below layer, crash dive, air, battery, hull and depth warnings |
+| Lamps | Surfaced, periscope, silent, detected, enemy ASDIC, diesel, below layer, crash dive, air, battery, hull and depth warnings, incoming torpedo, aircraft, mines, night |
 | Torpedo data computer | Locked target: name, tonnage, range, speed, course, angle on the bow, lead and run time |
+| Mission panel | Mission, progress (ships left, time to survive), conditions and score |
 | Bottom line | Summary of the commands |
 
 When the hull drops below 30% the whole panel switches to red emergency lighting.
@@ -47,11 +53,13 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
 | I | Patrol statistics |
 | M | Sound on / off |
 | G | CRT effects (glow, phosphor persistence, scanlines) on / off |
+| ENTER | Accept the orders at the start of a patrol |
 | ESC | Pause (Q in the pause screen abandons the patrol) |
 
 ## How to play
 
-1. Each patrol starts with a convoy report: bearing and approximate range.
+1. Each patrol starts with orders: the mission, where the enemy was last reported and the
+   conditions (day, dusk or night; calm, moderate or stormy sea; fog). Press ENTER.
 2. Find the convoy with the sonar, close in at periscope depth and keep the periscope
    on the target.
 3. Press **T** to lock a ship. The torpedo data computer works out where the ship will
@@ -61,8 +69,20 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
 5. Get away from the escorts: go deep, slow down, run silent, hide below the
    thermocline.
 
-Sink all the merchants, or let the convoy escape, and after a short pause the boat is
-resupplied (torpedoes, a hull patch) and the next, larger convoy is reported.
+When a mission ends, the boat is resupplied (torpedoes, a hull patch) and the next orders
+arrive.
+
+### Missions
+
+| Mission | Goal |
+|---|---|
+| Convoy attack | Sink the merchants of an escorted convoy |
+| Submarine duel | Sink an enemy submarine that is hunting you |
+| Escape the hunters | Survive 6 minutes against a hunter-killer group (3,000 point bonus), or sink them all |
+| Anchorage raid | Sink the ships at anchor behind a minefield |
+
+The first five patrols are convoy, duel, convoy, hunters, anchorage; then they are drawn
+at random, and convoys and escorts grow with every patrol.
 
 ### Rules worth knowing
 
@@ -80,8 +100,15 @@ resupplied (torpedoes, a hull patch) and the next, larger convoy is reported.
   (90 m) ASDIC is much weaker. An escort that has you is drawn in red.
 - Depth charges sink at about 3 m/s and explode at the depth the escort guessed.
 - Below 220 m the hull starts to give; at 280 m it collapses.
-- Sonar colours: green = ship, red = torpedo, yellow = depth charge. Passive blips
-  are approximate. A ping is exact, but every escort hears it.
+- Sonar colours: green = ship, blue = submarine, red = torpedo, yellow = depth charge,
+  orange × = mine. Passive blips are approximate. A ping is exact, but every enemy hears it.
+- Enemy submarine torpedoes run shallow: deeper than 18 m they pass over you. Ours hit a
+  submarine only at periscope depth or surfaced.
+- Aircraft (by day and at dusk, not in storms or fog) spot a surfaced boat from 6 km and
+  drop shallow depth charges: crash dive to 60 m.
+- Mines are moored 4 to 35 m deep; a ping shows them.
+- Night, fog and storms shorten the view both ways; storms also make the periscope dip
+  under the waves.
 
 ### Difficulty
 
@@ -102,16 +129,19 @@ resupplied (torpedoes, a hull patch) and the next, larger convoy is reported.
 | Tanker | 8,000-11,000 GRT, two torpedoes, burns and explodes |
 | Flower-class corvette | Slow (16 kn) but persistent escort |
 | V&W-class destroyer | Fast (34 kn) escort, attacks at speed |
+| T-class submarine | Hunts you at periscope depth (surfaced at night), fires salvos of three torpedoes |
+| Sunderland and Hudson aircraft | Patrol by day, attack a surfaced or shallow boat with depth charges |
 
-The best five scores (tonnage sunk) are kept in the browser's local storage.
+The score is the tonnage sunk plus mission bonuses. The best five scores are kept in the
+browser's local storage.
 
 ## Code layout
 
 `uboot-zone.html` holds everything. The `<script>` block has two parts:
 
-1. **Logic** (no DOM): constants, wireframe models, game state, commands, the
-   simulation (boat, convoy, escort AI, torpedoes, depth charges, sonar). `step(game,
-   realDt, input)` advances the game.
+1. **Logic** (no DOM): constants, wireframe models, game state, missions and conditions,
+   commands, the simulation (boat, convoy, escort and submarine AI, aircraft, torpedoes,
+   depth charges, mines, sonar). `step(game, realDt, input)` advances the game.
 2. **UI WIRING**: canvas rendering (periscope projection, instruments, overlays), the
    glow/scanline effects, WebAudio sounds (all synthesized), keyboard input and the
    main loop.
@@ -130,9 +160,12 @@ npm test
 ```
 
 The tests load the logic straight from `uboot-zone.html` and check the boat dynamics,
-torpedoes and firing solutions, depth charges, detection, sonar and patrols; they also
-drive the real page in jsdom (with a stub canvas) through the title screen, keys,
+torpedoes and firing solutions, depth charges, detection, sonar, missions, conditions,
+enemy submarines, aircraft and mines; they also
+drive the real page in jsdom (with a stub canvas) through the title screen, orders, keys,
 overlays, game over and high scores.
+
+The manual's screenshots in `docs/manual/` were taken from the game itself.
 
 ## License
 

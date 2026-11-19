@@ -24,6 +24,12 @@ function stubContext(log) {
   });
 }
 
+const openWindows = new Set();
+test.afterEach(() => {
+  for (const w of openWindows) w.close();
+  openWindows.clear();
+});
+
 function openApp() {
   const texts = [];
   const errors = [];
@@ -37,6 +43,7 @@ function openApp() {
     },
   });
   const { window } = dom;
+  openWindows.add(window);
   const key = (code, type = 'keydown') => window.dispatchEvent(new window.KeyboardEvent(type, { code, bubbles: true }));
   const press = code => { key(code); key(code, 'keyup'); };
   const frames = async n => { await sleep(n * 17 + 20); };
@@ -63,6 +70,11 @@ test('ENTER starts a patrol and the instruments are drawn', async () => {
   app.press('Enter');
   await app.frames(4);
   assert.equal(app.peek('mode'), 'play');
+  assert.equal(app.peek('overlay'), 'briefing', 'orders are shown first');
+  assert.ok(app.texts.includes('ORDERS FROM U-BOAT COMMAND'));
+  app.press('Enter');
+  await app.frames(3);
+  assert.equal(app.peek('overlay'), null);
   assert.ok(app.peek('game').ships.length > 0);
   for (const label of ['DEPTH M', 'SPEED KN', 'ENGINE TELEGRAPH', 'HEADING', 'HELM', 'TORPEDO DATA COMPUTER']) {
     assert.ok(app.texts.includes(label), label);
@@ -77,6 +89,7 @@ test('keys drive the boat', async () => {
   await app.frames(2);
   app.press('Enter');
   await app.frames(2);
+  app.press('Enter');
   const g = app.peek('game');
   const t0 = g.player.telegraph;
   app.press('KeyW');
@@ -104,6 +117,7 @@ test('H, I and ESC open overlays that pause the game', async () => {
   await app.frames(2);
   app.press('Enter');
   await app.frames(2);
+  app.press('Enter');
   app.press('KeyH');
   await app.frames(2);
   assert.equal(app.peek('overlay'), 'help');
@@ -115,7 +129,7 @@ test('H, I and ESC open overlays that pause the game', async () => {
   app.press('KeyI');
   await app.frames(2);
   assert.equal(app.peek('overlay'), 'stats');
-  assert.ok(app.texts.includes('TONNAGE SUNK'));
+  assert.ok(app.texts.includes('SCORE'));
   app.press('Escape');
   assert.equal(app.peek('overlay'), null);
   app.press('Escape');
@@ -131,6 +145,7 @@ test('losing the boat shows the report and stores the score', async () => {
   await app.frames(2);
   app.press('Enter');
   await app.frames(2);
+  app.press('Enter');
   const g = app.peek('game');
   g.stats.tonnage = 12345;
   g.player.depth = 300;
@@ -141,7 +156,7 @@ test('losing the boat shows the report and stores the score', async () => {
   assert.equal(app.peek('mode'), 'over');
   assert.ok(app.texts.some(t => t.includes('U-BOOT LOST')));
   const scores = JSON.parse(app.window.localStorage.getItem('uboot-zone.scores'));
-  assert.equal(scores[0].grt, 12345);
+  assert.equal(scores[0].score, 12345);
   app.press('Enter');
   await app.frames(2);
   assert.equal(app.peek('mode'), 'play');

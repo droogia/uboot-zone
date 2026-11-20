@@ -47,6 +47,11 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
   depth-charge pistols before a close blast, the hull groaning in silent running, the deck
   gun.
 
+## Sea life
+
+Schools of fish below periscope depth (they scatter from the hull) and pods of dolphins
+leaping near the boat by day in a calm or moderate sea. Pure scenery.
+
 ## Blueprints
 
 **N** opens a recognition manual with a blueprint sheet for your Type VIIC, every enemy
@@ -75,7 +80,7 @@ any time.
 | R / F | Order a shallower / deeper depth (surface, 13 m periscope depth, 20, 30 ... 260 m) |
 | C | Crash dive to 60 m: fast, but noisy |
 | P | Raise / lower the periscope |
-| ← / → | Train the periscope; hold SHIFT to turn it faster |
+| ← / → | Train the periscope: a tap moves it a fraction of a degree, holding speeds it up; SHIFT turns it faster |
 | ↑ / ↓ | Periscope high power (6×) / low power (1.5×) |
 | B | Periscope back to the bow |
 | V | Steer the boat onto the periscope bearing (auto helm holds the course; A/D take over) |
@@ -87,7 +92,7 @@ any time.
 | H | Help |
 | I | Patrol statistics |
 | M | Sound on / off |
-| G | CRT effects (glow, phosphor persistence, scanlines) on / off |
+| G | CRT effects (glow, phosphor persistence, scanlines): FULL, MEDIUM, LOW, OFF |
 | K | AI captain takes / gives back command (demo mode) |
 | O | First officer's step-by-step guidance on / off |
 | + / - | Text size, 75% to 125% in 5% steps (the text also scales with the window, up to 4K) |

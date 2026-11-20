@@ -721,3 +721,19 @@ test('the plot never shows what the boat cannot see or hear', () => {
   run(g, 20);
   assert.equal(g.plot.contacts[s.id], undefined);
 });
+
+// ---------------------------------------------------------------- v1.5
+
+test('periscope training accelerates: a tap is a fine move, holding reaches full speed', () => {
+  const g = emptySea();
+  const p = g.player;
+  p.zoom = 1;
+  run(g, 0.1, { scopeRight: true });
+  const tap = p.scopeBearing;
+  assert.ok(tap > 0 && tap < 0.2, `tap moved ${tap}°`);
+  run(g, 0.5, {});
+  p.scopeBearing = 0;
+  run(g, 3, { scopeRight: true });
+  const full = L.SUB.scopeRate * 0.3;
+  assert.ok(p.scopeBearing > full * 2, `held for 3 s: ${p.scopeBearing}°`);
+});

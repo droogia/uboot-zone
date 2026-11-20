@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.4. This manual explains every part of the control room, how the boat
+For game version v1.5. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -31,6 +31,7 @@ version; the in-game help (**H**) has the keys and a few reminders.
 21. [The deck gun](#21-the-deck-gun)
 22. [The chart](#22-the-chart)
 23. [What you hear](#23-what-you-hear)
+24. [Sea life and the CRT effects](#24-sea-life-and-the-crt-effects)
 
 A note on time: the game runs **four times faster than real time** so that an attack
 takes minutes, not hours. Speeds are given in real knots and the boat behaves in proportion,
@@ -84,6 +85,12 @@ water the boat runs on its battery and breathes the air it took down with it.
 Everything you need to know about the boat is on these instruments: there is no separate
 status screen. **I** opens the patrol statistics, **H** the help, **ESC** pauses.
 
+The **command summary** at the bottom (16) has three sections of two rows. On the left are
+the interface options (sound, CRT effects, text size, pause). In the middle are the boat's
+commands in three groups: navigation; periscope, aiming and sonar; weapons. On the right
+are the AI and the information screens (guide, AI captain, help, statistics, blueprints).
+The keys are bright and their descriptions dimmer, so the keys stand out.
+
 When the hull drops below 30%, the control room switches to **red emergency lighting**: all
 the green instruments turn red and the screen pulses. Get the boat out of trouble.
 
@@ -101,8 +108,10 @@ boat is at **periscope depth (13 m) or shallower**. Surfaced, you look from the 
 higher above the waves, whether the periscope is up or not. Below 16.5 m the periscope is under water and the view shows the sea around you
 instead (see below). Raising takes about a second, lowering a little less.
 
-**Training it.** **←** and **→** turn the periscope; hold **SHIFT** to turn it three times
-faster. It turns independently of the boat, so you can sail one way and look another.
+**Training it.** **←** and **→** turn the periscope. It starts slowly and speeds up: a
+short tap moves it a fraction of a degree (useful at high power to put the crosshair exactly
+on a target), while holding the key brings it up to full speed in about a second. Hold
+**SHIFT** for three times the full speed. It turns independently of the boat, so you can sail one way and look another.
 **B** brings it back to the bow. **V** does the opposite: it orders the helmsman to steer
 the boat onto the bearing the periscope is looking at. The periscope stays on that bearing
 while the bow swings round, and the auto helm then holds the new course (see the helm,
@@ -708,7 +717,7 @@ browser; they start after the first key press.
 | R / F | Order a shallower / deeper depth |
 | C | Crash dive |
 | P | Raise / lower the periscope |
-| ← / → | Train the periscope (SHIFT = faster) |
+| ← / → | Train the periscope: a tap for fine moves, hold to speed up (SHIFT = faster) |
 | ↑ / ↓ | Periscope high / low power |
 | B | Periscope to the bow |
 | V | Steer to the periscope bearing (auto helm) |
@@ -720,7 +729,7 @@ browser; they start after the first key press.
 | H | Help |
 | I | Patrol statistics |
 | M | Sound on / off |
-| G | CRT effects on / off |
+| G | CRT effects: FULL → MEDIUM → LOW → OFF |
 | K | AI captain takes / gives back command (demo) |
 | O | First officer's guidance on / off |
 | + / - | Text size (75% to 125%) |
@@ -860,3 +869,22 @@ charges, torpedoes, aircraft), v1.4 adds:
 - **The hull in silent running**: below 40 m, quiet groans of the pressure hull and the odd
   drip, more often the deeper you are.
 - **The deck gun**: crack, thump and an echo across the water; a dull boom for each hit.
+
+## 24. Sea life and the CRT effects
+
+**Sea life.** Below periscope depth, schools of fish swim at their own depths (between about
+10 and 140 m) and dart away from the hull when the boat comes close. On the surface, by day in
+a calm or moderate sea, pods of dolphins leap and blow near the boat; the high-power periscope
+shows them best. Neither has any effect on the game.
+
+**The CRT effects (G)** step through four levels:
+
+| Level | Glow | Phosphor persistence | Scanlines |
+|---|---|---|---|
+| FULL | strong | long trails | full |
+| MEDIUM | softer | short trails | lighter |
+| LOW | faint | none | faint |
+| OFF | none | none | none |
+
+On a slow machine the game switches them off by itself after a few seconds of low frame rate;
+G turns them back on.

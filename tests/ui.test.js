@@ -79,7 +79,8 @@ test('ENTER starts a patrol and the instruments are drawn', async () => {
   for (const label of ['DEPTH M', 'SPEED KN', 'ENGINE TELEGRAPH', 'HEADING', 'HELM', 'TORPEDO DATA COMPUTER']) {
     assert.ok(app.texts.includes(label), label);
   }
-  assert.ok(app.texts.some(t => t.startsWith('W/S ENGINE')), 'command line');
+  // command line: keys and descriptions drawn separately, in the three sections
+  for (const t of ['M ', 'CRT EFFECTS', 'W/S ', 'ENGINE', 'E ', 'DECK GUN', 'K ', 'AI CAPTAIN', 'N ', 'BLUEPRINTS']) assert.ok(app.texts.includes(t), `command line: ${t}`);
   assert.deepEqual(app.errors, []);
   app.close();
 });
@@ -270,5 +271,15 @@ test('L shows the chart (↑/↓ change its scale) and E fires the deck gun', as
   assert.ok(g.messages.some(m => /DECK GUN/.test(m.text)), 'refused while submerged');
   await app.frames(2);
   assert.ok(app.texts.includes('DECK GUN 88'));
+  assert.deepEqual(app.errors, []);
+});
+
+test('G steps the CRT effects through FULL, MEDIUM, LOW and OFF', async () => {
+  const app = openApp();
+  await app.frames(2);
+  assert.equal(app.peek('effectsLevel'), 3);
+  const seen = [];
+  for (let i = 0; i < 4; i++) { app.press('KeyG'); await app.frames(1); seen.push(app.peek('effectsLevel')); }
+  assert.deepEqual(seen, [2, 1, 0, 3]);
   assert.deepEqual(app.errors, []);
 });

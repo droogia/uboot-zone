@@ -33,6 +33,13 @@ accelerates, turns and dives slowly.
 
 When the hull drops below 30% the whole panel switches to red emergency lighting.
 
+## Blueprints
+
+**N** opens a recognition manual with a blueprint sheet for your Type VIIC, every enemy
+ship and aircraft, and the G7 torpedo: side elevation, plan, front view and a turning 3D
+view drawn from the game's own wireframes, with dimensions and the data that matter in
+the game. ←/→ turn the pages.
+
 ## Learning with the AI
 
 - **K: the AI captain (demo).** He commands the boat and carries out the mission with the
@@ -69,7 +76,8 @@ any time.
 | G | CRT effects (glow, phosphor persistence, scanlines) on / off |
 | K | AI captain takes / gives back command (demo mode) |
 | O | First officer's step-by-step guidance on / off |
-| + / - | Text size (the text also scales with the window, up to 4K) |
+| + / - | Text size, 75% to 125% in 5% steps (the text also scales with the window, up to 4K) |
+| N | Blueprints of every vessel and aircraft (also from the title screen) |
 | ENTER | Accept the orders at the start of a patrol |
 | ESC | Pause (Q in the pause screen abandons the patrol) |
 

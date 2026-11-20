@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.2';
+const VERSION = '001.3';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -632,7 +632,41 @@ function buildPlane(span, length, engines, flyingBoat) {
   return m.edges;
 }
 
+function buildTypeVII() {
+  // Our own boat: a Type VIIC, 67 m.
+  const m = modelBuilder();
+  const deck = m.hull({ length: 67, beam: 6.2, freeboard: 1.7, sheerBow: 1.6, sheerStern: 0.3, bowLen: 16, sternLen: 16, sternWidth: 0.25, rake: 3 });
+  for (const x of [-3.3, 3.3]) {                                     // saddle tanks
+    m.poly([[x * 0.6, 0.3, -14], [x, 0.5, -9], [x, 0.5, 9], [x * 0.6, 0.3, 14]]);
+    m.poly([[x * 0.6, -0.4, -14], [x * 0.95, -0.6, -9], [x * 0.95, -0.6, 9], [x * 0.6, -0.4, 14]]);
+  }
+  m.box(-1.5, 1.5, 1.7, 4.4, -4.5, 4.5);                            // conning tower
+  m.poly([[-1.5, 4.4, 4.5], [0, 4.4, 7], [1.5, 4.4, 4.5]]);         // bridge fairing
+  m.poly([[-1.5, 1.7, 4.5], [0, 1.7, 7.5], [1.5, 1.7, 4.5]]);
+  m.line(0, 1.7, 7.5, 0, 4.4, 7);
+  m.boxRail(-1.5, 1.5, 4.4, -4.5, 4.5, 0.9);                         // bridge rail
+  m.box(-1.3, 1.3, 3.2, 4.4, -8, -4.5);                              // Wintergarten
+  m.boxRail(-1.3, 1.3, 4.4, -8, -4.5, 0.8);
+  m.gun(-6.3, 4.4, 0.6, -1);                                        // 20 mm flak
+  m.line(0, 4.4, 1.2, 0, 9.5, 1.2);                                 // attack periscope
+  m.line(0, 4.4, 2.6, 0, 10.5, 2.6);                                // sky periscope
+  m.ring(0, 9.5, 1.2, 0.25, 0.25, 6);
+  m.ring(0, 10.5, 2.6, 0.3, 0.3, 6);
+  m.line(0, 4.4, -1.5, 0, 7.5, -1.5);                               // radio mast / DF loop
+  m.ring(0, 7.9, -1.5, 0.4, 0.01, 8);
+  m.gun(11, deck(11), 0.9, 1);                                      // 88 mm deck gun
+  m.line(0, deck(30) + 0.2, 33, 0, 7.5, 3);                         // jumping wires
+  m.line(0, 7.5, -3, 0, deck(-30) + 0.2, -32);
+  m.line(0, deck(32), 32.5, 0, 2.8, 30);                            // net cutter
+  for (const z of [26, -30]) m.line(-3.4, 0, z, 3.4, 0, z);          // bow and stern planes
+  m.poly([[0, 0, -33], [0, -2.5, -33], [0, -2.5, -31.5]]);         // rudder
+  for (let z = -26; z <= 26; z += 4) m.line(-1.2, deck(z) + 0.05, z, 1.2, deck(z) + 0.05, z);   // casing gratings
+  for (const x of [-1.2, 1.2]) m.line(x, deck(-26) + 0.05, -26, x, deck(26) + 0.05, 26);
+  return m.edges;
+}
+
 const MODELS = {
+  typevii: buildTypeVII(),
   freighter: buildFreighter(),
   tanker: buildTanker(),
   destroyer: buildDestroyer(),
@@ -2643,12 +2677,14 @@ let titleDifficulty = 'normal';
 let effectsOn = true;
 let effectsChosen = false;                          // set once the player toggles G
 const UI_KEY = 'uboot-zone.uiScale';
+const UI_MIN = 0.75, UI_MAX = 1.25, UI_STEP = 0.05;   // text size 75% to 125% in 5% steps
 let uiScale = (() => {
-  try { const v = Number(window.localStorage.getItem(UI_KEY)); return v >= 0.6 && v <= 2.5 ? v : 1; } catch (e) { return 1; }
+  try { const v = Number(window.localStorage.getItem(UI_KEY)); return v >= UI_MIN && v <= UI_MAX ? v : 1; } catch (e) { return 1; }
 })();
 let uiToast = 0;                                    // real time the text size was last changed
 function setUiScale(v) {
-  uiScale = Math.round(clamp(v, 0.6, 2.5) * 10) / 10;
+  uiScale = Math.round(clamp(v, UI_MIN, UI_MAX) / UI_STEP) * UI_STEP;
+  uiScale = Math.round(uiScale * 100) / 100;
   try { window.localStorage.setItem(UI_KEY, String(uiScale)); } catch (e) { /* storage unavailable */ }
   uiToast = performance.now();
   resize();
@@ -3991,8 +4027,8 @@ function drawRight(c, g, r) {
   text(c, `${fmtInt(score(g))}`, r.x + r.w - pad, sy, C.yellow, FS, 'right');
 }
 
-const COMMAND_LINE = 'W/S ENGINE · A/D RUDDER · R/F DEPTH · C CRASH · P SCOPE · ←/→ TRAIN · ↑/↓ POWER · B SCOPE TO BOW · V STEER TO SCOPE · T LOCK · SPACE FIRE · 1-5 TUBE · TAB PING · X SILENT · K AI CAPTAIN · O GUIDE · H HELP · I STATS · ESC PAUSE';
-const DEMO_LINE = 'THE AI CAPTAIN HAS THE CONN · K: TAKE COMMAND · O: SWITCH TO GUIDANCE · H HELP · I STATS · ESC PAUSE';
+const COMMAND_LINE = 'W/S ENGINE · A/D RUDDER · R/F DEPTH · C CRASH · P SCOPE · ←/→ TRAIN · ↑/↓ POWER · B SCOPE TO BOW · V STEER TO SCOPE · T LOCK · SPACE FIRE · 1-5 TUBE · TAB PING · X SILENT · K AI CAPTAIN · O GUIDE · H HELP · I STATS · N BLUEPRINTS · ESC PAUSE';
+const DEMO_LINE = 'THE AI CAPTAIN HAS THE CONN · K: TAKE COMMAND · O: SWITCH TO GUIDANCE · H HELP · I STATS · N BLUEPRINTS · ESC PAUSE';
 function drawCommandLine(c, r) {
   const str = game && game.ai.mode === 'demo' ? DEMO_LINE : COMMAND_LINE;
   let size = FS * 0.85;
@@ -4065,6 +4101,7 @@ const HELP_KEYS = [
   ['TAB', 'Active sonar ping'],
   ['X', 'Silent running'],
   ['H / I', 'This help / patrol statistics'],
+  ['N', 'Blueprints of every vessel and aircraft'],
   ['M / G', 'Sound on-off / CRT glow effects'],
   ['ENTER', 'Accept the orders of a new patrol'],
   ['K', 'AI captain takes / gives back command (demo)'],
@@ -4214,7 +4251,201 @@ function drawPause(c) {
   text(c, 'ESC: RESUME · Q: ABANDON PATROL', r.x + r.w / 2, r.y + FS * 6, rgba(INK, 0.7), FS, 'center');
 }
 
-const TITLE_SHIP = { kind: 'destroyer', x: 0, y: 0, heading: 0, length: 95, beam: 9.4, speed: 0, hp: 1, maxHp: 1, sinking: null, burning: false };
+/* ---------- blueprints: the recognition manual (N) ---------- */
+const kn = v => `${v} KN`;
+const BLUEPRINTS = [
+  { kind: 'typevii', title: 'U-BOOT TYPE VIIC', sub: 'YOUR BOAT · ATLANTIC ATTACK SUBMARINE', color: 'green', specs: [
+    ['LENGTH · BEAM', '67.1 M · 6.2 M'], ['DISPLACEMENT', '769 T SURFACED · 871 T SUBMERGED'],
+    ['SPEED', `${kn(SUB.maxSurface)} DIESEL · ${kn(SUB.maxSubmerged)} E-MOTOR · ${kn(SUB.silentMax)} SILENT`],
+    ['DEPTH', `PERISCOPE ${PERISCOPE_DEPTH} M · SAFE ${SAFE_DEPTH} M · CRUSH ${CRUSH_DEPTH} M`],
+    ['TORPEDOES', `4 BOW + 1 STERN TUBE · ${TORPEDO.maxReserve} RELOADS`],
+    ['GUNS', '88 MM DECK GUN · 20 MM FLAK'], ['CREW', '44 - 52'],
+  ], notes: 'Fast on the surface, slow and blind below. Turning circle about 190 m at full rudder.' },
+  { kind: 'freighter', title: 'CARGO STEAMER', sub: 'MERCHANT · CONVOY TARGET', specs: [
+    ['LENGTH · BEAM', `${SHIP_CLASSES.freighter.length} M · ${SHIP_CLASSES.freighter.beam} M`],
+    ['TONNAGE', `${fmtInt(SHIP_CLASSES.freighter.grt[0])} - ${fmtInt(SHIP_CLASSES.freighter.grt[1])} GRT`],
+    ['SPEED', `${kn(SHIP_CLASSES.freighter.maxSpeed)} MAX · CONVOY 7 - 10 KN`],
+    ['HITS TO SINK', '1 · 2 ABOVE 6,200 GRT'], ['RECOGNITION', 'TWO MASTS WITH DERRICKS, ONE FUNNEL MIDSHIPS'],
+  ], notes: 'Unarmed. Heavy coal smoke shows a steaming convoy from far away.' },
+  { kind: 'tanker', title: 'TANKER', sub: 'MERCHANT · PRIORITY TARGET', specs: [
+    ['LENGTH · BEAM', `${SHIP_CLASSES.tanker.length} M · ${SHIP_CLASSES.tanker.beam} M`],
+    ['TONNAGE', `${fmtInt(SHIP_CLASSES.tanker.grt[0])} - ${fmtInt(SHIP_CLASSES.tanker.grt[1])} GRT`],
+    ['SPEED', `${kn(SHIP_CLASSES.tanker.maxSpeed)} MAX`], ['HITS TO SINK', '2'],
+    ['RECOGNITION', 'LOW, LONG HULL, BRIDGE MIDSHIPS, FUNNEL AFT, CATWALK'],
+  ], notes: 'Burns and explodes; a sinking tanker leaves burning oil on the water.' },
+  { kind: 'corvette', title: 'FLOWER-CLASS CORVETTE', sub: 'ESCORT · ROYAL NAVY', color: 'red', specs: [
+    ['LENGTH · BEAM', `${SHIP_CLASSES.corvette.length} M · ${SHIP_CLASSES.corvette.beam} M`],
+    ['DISPLACEMENT', `${fmtInt(SHIP_CLASSES.corvette.grt[0])} T`],
+    ['SPEED', `${kn(SHIP_CLASSES.corvette.maxSpeed)} · ATTACK RUN ${kn(SHIP_CLASSES.corvette.attackSpeed)}`],
+    ['ARMAMENT', '4-INCH GUN · 2-PDR POM-POM'], ['ANTI-SUBMARINE', `ASDIC · HYDROPHONES · ${SHIP_CLASSES.corvette.charges} DEPTH CHARGES`],
+    ['RECOGNITION', 'SHORT, HIGH BOW, MAST BEFORE THE BRIDGE, ONE FUNNEL'],
+  ], notes: 'Slow but stubborn: turns tight and keeps hunting.' },
+  { kind: 'destroyer', title: 'V&W-CLASS DESTROYER', sub: 'ESCORT · ROYAL NAVY', color: 'red', specs: [
+    ['LENGTH · BEAM', `${SHIP_CLASSES.destroyer.length} M · ${SHIP_CLASSES.destroyer.beam} M`],
+    ['DISPLACEMENT', `${fmtInt(SHIP_CLASSES.destroyer.grt[0])} T`],
+    ['SPEED', `${kn(SHIP_CLASSES.destroyer.maxSpeed)} · ATTACK RUN ${kn(SHIP_CLASSES.destroyer.attackSpeed)}`],
+    ['ARMAMENT', 'FOUR 4-INCH GUNS · TWO TRIPLE TORPEDO TUBES'],
+    ['ANTI-SUBMARINE', `ASDIC · HYDROPHONES · ${SHIP_CLASSES.destroyer.charges} DEPTH CHARGES`],
+    ['RECOGNITION', 'LONG AND LOW, TWO FUNNELS, GUNS SUPERFIRING FORE AND AFT'],
+  ], notes: 'Fast: at attack speed its own noise deafens its hydrophones and blurs its ASDIC.' },
+  { kind: 'tclass', title: 'T-CLASS SUBMARINE', sub: 'ENEMY SUBMARINE · ROYAL NAVY', color: 'blue', specs: [
+    ['LENGTH · BEAM', `${SHIP_CLASSES.tclass.length} M · ${SHIP_CLASSES.tclass.beam} M`],
+    ['DISPLACEMENT', `${fmtInt(SHIP_CLASSES.tclass.grt[0])} T`],
+    ['SPEED', `${kn(SHIP_CLASSES.tclass.maxSpeed)} SURFACED · ${kn(SHIP_CLASSES.tclass.subSpeed)} SUBMERGED`],
+    ['TORPEDOES', `SALVOS OF ${ENEMY_TORPEDO.salvo} · ${kn(ENEMY_TORPEDO.speedKn)} · RUN SHALLOW (< ${ENEMY_TORPEDO.hitDepth} M)`],
+    ['GUN', '4-INCH DECK GUN'], ['RECOGNITION', 'BULGE OF THE EXTERNAL BOW TUBES, NET CUTTER'],
+  ], notes: `Our torpedoes hit it only at periscope depth or surfaced (< ${SUB_HIT_DEPTH} M).` },
+  { kind: 'sunderland', title: 'SHORT SUNDERLAND', sub: 'FLYING BOAT · COASTAL COMMAND', color: 'red', specs: [
+    ['SPAN · LENGTH', '34 M · 26 M'], ['SPEED', kn(PLANE_CLASSES.sunderland.speedKn)], ['ENGINES', 'FOUR'],
+    ['WEAPONS', `${PLANE_CLASSES.sunderland.charges} DEPTH CHARGES, SET ${AIR_DC_DEPTH[0]} - ${AIR_DC_DEPTH[1]} M`],
+    ['SEES', 'SURFACED BOAT 6 KM · PERISCOPE CLOSE IN'],
+  ], notes: 'Crash dive to 60 m the moment the lookouts report it.' },
+  { kind: 'hudson', title: 'LOCKHEED HUDSON', sub: 'PATROL BOMBER · COASTAL COMMAND', color: 'red', specs: [
+    ['SPAN · LENGTH', '20 M · 14 M'], ['SPEED', kn(PLANE_CLASSES.hudson.speedKn)], ['ENGINES', 'TWO'],
+    ['WEAPONS', `${PLANE_CLASSES.hudson.charges} DEPTH CHARGES, SET ${AIR_DC_DEPTH[0]} - ${AIR_DC_DEPTH[1]} M`],
+    ['SEES', 'SURFACED BOAT 6 KM · PERISCOPE CLOSE IN'],
+  ], notes: 'Faster than the Sunderland: less time to get under.' },
+  { kind: 'torpedo', title: 'G7 TORPEDO', sub: 'OUR MAIN WEAPON · 53.3 CM', color: 'white', specs: [
+    ['LENGTH · DIAMETER', '7.2 M · 0.53 M'], ['SPEED · RANGE', `${kn(TORPEDO.speedKn)} · ${TORPEDO.range / 1000} KM`],
+    ['GUIDANCE', `GYRO: TURNS ${TORPEDO.turnRate}°/S ONTO THE SET COURSE, THEN RUNS STRAIGHT`],
+    ['ARMING', `AFTER ${TORPEDO.armDistance} M`], ['RELOAD', `${Math.round(TORPEDO.reload / TIME_SCALE)} S PER TUBE`],
+  ], notes: 'Drawn twice life size in the periscope so that you can make it out.' },
+];
+let bpIndex = 0;
+
+// Model segments with their extent, measured once.
+function bpModel(kind) {
+  const e = kind === 'torpedo' ? TORPEDO_MODEL : MODELS[kind];
+  const lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
+  for (let i = 0; i < e.length; i++) { const k = i % 3; lo[k] = Math.min(lo[k], e[i]); hi[k] = Math.max(hi[k], e[i]); }
+  return { e, lo, hi };
+}
+
+// Orthographic view: axes picks model coordinates for screen x and y (index, sign).
+function bpOrtho(c, mdl, box, ax, ay, scale, color, label, dims) {
+  const { e, lo, hi } = mdl;
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  const mx = (lo[ax[0]] + hi[ax[0]]) / 2, my = (lo[ay[0]] + hi[ay[0]]) / 2;
+  const X = v => cx + (v - mx) * ax[1] * scale, Y = v => cy - (v - my) * ay[1] * scale;
+  // grid every 5 m (every 1 m for small objects)
+  const step = scale > 25 ? 1 : 5;
+  c.beginPath();
+  for (let v = Math.ceil((mx - box.w / 2 / scale) / step) * step; v <= mx + box.w / 2 / scale; v += step) line(c, X(v), box.y, X(v), box.y + box.h);
+  for (let v = Math.ceil((my - box.h / 2 / scale) / step) * step; v <= my + box.h / 2 / scale; v += step) line(c, box.x, Y(v), box.x + box.w, Y(v));
+  stroke(c, C.blue, LW * 0.6, 0.13);
+  c.beginPath();
+  c.rect(box.x, box.y, box.w, box.h);
+  stroke(c, C.blue, LW, 0.45);
+  text(c, label, box.x + FS * 0.5, box.y + FS * 0.8, C.blue, FS * 0.7);
+  if (ay[0] === 1 && lo[1] < 0.5 && hi[1] > 0.5) {                    // waterline
+    c.beginPath();
+    line(c, box.x, Y(0), box.x + box.w, Y(0));
+    c.setLineDash([6, 6]);
+    stroke(c, C.blue, LW, 0.6);
+    c.setLineDash([]);
+  }
+  c.beginPath();
+  for (let i = 0; i < e.length; i += 6) line(c, X(e[i + ax[0]]), Y(e[i + ay[0]]), X(e[i + 3 + ax[0]]), Y(e[i + 3 + ay[0]]));
+  stroke(c, C[color], LW, 0.95);
+  // dimension lines
+  for (const d of dims || []) {
+    const horiz = d.axis === 'x';
+    const a = horiz ? X(lo[ax[0]]) : Y(lo[ay[0]]);
+    const b = horiz ? X(hi[ax[0]]) : Y(hi[ay[0]]);
+    const k = FS * 0.35;
+    c.beginPath();
+    if (horiz) {
+      const y = box.y + box.h - FS * 0.9;
+      line(c, a, y, b, y); line(c, a, y - k, a, y + k); line(c, b, y - k, b, y + k);
+      stroke(c, C.yellow, LW, 0.85);
+      text(c, d.text, (a + b) / 2, y - FS * 0.55, C.yellow, FS * 0.7, 'center');
+    } else {
+      const x = box.x + box.w - FS * 1.1;
+      line(c, x, a, x, b); line(c, x - k, a, x + k, a); line(c, x - k, b, x + k, b);
+      stroke(c, C.yellow, LW, 0.85);
+      c.save();
+      c.translate(x - FS * 0.55, (a + b) / 2);
+      c.rotate(-Math.PI / 2);
+      text(c, d.text, 0, 0, C.yellow, FS * 0.7, 'center');
+      c.restore();
+    }
+  }
+}
+
+// Slowly turning perspective view.
+function bpPersp(c, mdl, box, t, color) {
+  const { e, lo, hi } = mdl;
+  const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+  const mid = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+  const yaw = t * 0.35, tilt = 0.32;
+  const cyw = Math.cos(yaw), syw = Math.sin(yaw), ct = Math.cos(tilt), st = Math.sin(tilt);
+  const dist = size * 1.5, F = Math.min(box.w * 1.1, box.h * 2.2);
+  const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+  const pr = (x, y, z) => {
+    x -= mid[0]; y -= mid[1]; z -= mid[2];
+    const rx = x * cyw - z * syw, rz = x * syw + z * cyw;
+    const ry = y * ct - rz * st, rz2 = y * st + rz * ct + dist;
+    return [cx + rx / rz2 * F, cy - ry / rz2 * F];
+  };
+  c.beginPath();
+  c.rect(box.x, box.y, box.w, box.h);
+  stroke(c, C.blue, LW, 0.45);
+  text(c, '3D', box.x + FS * 0.5, box.y + FS * 0.8, C.blue, FS * 0.7);
+  c.beginPath();
+  for (let i = 0; i < e.length; i += 6) {
+    const a = pr(e[i], e[i + 1], e[i + 2]), b = pr(e[i + 3], e[i + 4], e[i + 5]);
+    line(c, a[0], a[1], b[0], b[1]);
+  }
+  stroke(c, C[color], LW, 0.9);
+}
+
+function drawBlueprints(c) {
+  const bp = BLUEPRINTS[bpIndex];
+  const pw = Math.min(W * 0.96, FS * 96), ph = Math.min(H * 0.94, FS * 56);
+  c.fillStyle = '#000';
+  c.fillRect(0, 0, W, H);
+  const r = panel(c, pw, ph);
+  const color = bp.color || 'green';
+  const fs = FS;
+  text(c, 'RECOGNITION MANUAL · BLUEPRINTS', r.x + fs * 1.2, r.y + fs * 1.4, rgba('blue', 0.9), fs * 0.8);
+  text(c, `${bpIndex + 1} / ${BLUEPRINTS.length}`, r.x + r.w - fs * 1.2, r.y + fs * 1.4, rgba('blue', 0.9), fs * 0.8, 'right');
+  text(c, bp.title, r.x + r.w / 2, r.y + fs * 2.6, C[color], fs * 1.6, 'center');
+  text(c, bp.sub, r.x + r.w / 2, r.y + fs * 4, rgba(INK, 0.8), fs * 0.85, 'center');
+  const mdl = bpModel(bp.kind);
+  const { lo, hi } = mdl;
+  const L = hi[2] - lo[2], B = hi[0] - lo[0], Hh = hi[1] - lo[1];
+  const top = r.y + fs * 5, bottom = r.y + r.h - fs * 2.4, gap = fs * 0.6;
+  const leftW = r.w * 0.62, x0 = r.x + fs, x1 = x0 + leftW + gap, rightW = r.x + r.w - fs - x1;
+  const availH = bottom - top - gap;
+  // side and plan share one scale, chosen so both fit
+  const scale = Math.min((leftW - fs * 2.5) / L, (availH - fs * 4) / (Hh + B + 4));
+  const need = Hh * scale + B * scale + fs * 6, extra = Math.max(0, availH - need) / 2;
+  const sideH = Hh * scale + fs * 3 + extra, planH = availH - sideH;
+  const real = bp.kind === 'torpedo' ? 1 / 1.8 : 1;                // the torpedo model is drawn twice life size
+  const m = v => `${(v * real).toFixed(v * real < 20 ? 1 : 0)} M`;
+  bpOrtho(c, mdl, { x: x0, y: top, w: leftW, h: sideH }, [2, 1], [1, 1], scale, color, 'SIDE · BOW TO THE RIGHT',
+    [{ axis: 'x', text: m(L) }, { axis: 'y', text: m(Hh) }]);
+  bpOrtho(c, mdl, { x: x0, y: top + sideH + gap, w: leftW, h: planH }, [2, 1], [0, -1], scale, color, 'PLAN · FROM ABOVE',
+    [{ axis: 'y', text: m(B) }]);
+  // right column: 3D, bow view, data
+  const vh = Math.min(availH * 0.34, rightW * 0.7);
+  bpPersp(c, mdl, { x: x1, y: top, w: rightW, h: vh }, performance.now() / 1000, color);
+  const fbox = { x: x1, y: top + vh + gap, w: rightW, h: vh * 0.8 };
+  const fscale = Math.min((fbox.w - fs * 3) / B, (fbox.h - fs * 2.5) / Hh);
+  bpOrtho(c, mdl, fbox, [0, -1], [1, 1], fscale, color, 'FRONT VIEW', []);
+  let y = fbox.y + fbox.h + fs * 1.2;
+  const ts = fs * 0.78;
+  for (const [k, v] of bp.specs) {
+    text(c, k, x1, y, C.yellow, ts * 0.85);
+    y += ts * 1.15;
+    for (const l of wrapText(c, v, rightW, ts)) { text(c, l, x1, y, C[INK], ts); y += ts * 1.2; }
+    y += ts * 0.35;
+  }
+  for (const l of wrapText(c, bp.notes, rightW, ts * 0.9)) { text(c, l, x1, y, rgba('white', 0.75), ts * 0.9); y += ts * 1.15; }
+  text(c, '←/→ OR A/D: PREVIOUS / NEXT  ·  N OR ESC: CLOSE', r.x + r.w / 2, r.y + r.h - fs * 1.2, rgba(INK, 0.7), fs * 0.85, 'center');
+}
+
+const TITLE_SHIP = { kind: 'typevii', x: 0, y: 0, heading: 0, length: 67, beam: 6.2, speed: 0, hp: 1, maxHp: 1, sinking: null, burning: false };
 function drawTitle(c, t) {
   const cx = W / 2, cy = H * 0.55;
   const F = (W / 2) / Math.tan(30 * DEG);
@@ -4254,7 +4485,7 @@ function drawTitle(c, t) {
   const blink = Math.sin(t * 4) > -0.3;
   if (blink) text(c, 'PRESS ENTER TO SAIL', cx, y + FS * 5.2, C.green, FS * 1.5, 'center');
   text(c, 'K: WATCH THE AI CAPTAIN (DEMO)  ·  O: SAIL WITH THE FIRST OFFICER\'S GUIDANCE', cx, y + FS * 7.2, C.blue, FS * 0.95, 'center');
-  text(c, `H: HELP  ·  M: SOUND  ·  G: CRT EFFECTS  ·  +/-: TEXT SIZE (${Math.round(uiScale * 100)}%)`, cx, y + FS * 8.9, rgba('green', 0.6), FS, 'center');
+  text(c, `H: HELP  ·  N: BLUEPRINTS  ·  M: SOUND  ·  G: CRT EFFECTS  ·  +/-: TEXT SIZE (${Math.round(uiScale * 100)}%)`, cx, y + FS * 8.9, rgba('green', 0.6), FS, 'center');
 }
 
 /* ---------- screen effects ---------- */
@@ -4668,11 +4899,13 @@ function onKeyDown(e) {
   const code = e.code;
   if (code === 'KeyM') { Sound.toggle(); return; }
   if (code === 'KeyG') { effectsOn = !effectsOn; effectsChosen = true; return; }
-  if (code === 'Equal' || code === 'NumpadAdd') { setUiScale(uiScale + 0.1); return; }
-  if (code === 'Minus' || code === 'NumpadSubtract') { setUiScale(uiScale - 0.1); return; }
+  if (code === 'Equal' || code === 'NumpadAdd') { setUiScale(uiScale + UI_STEP); return; }
+  if (code === 'Minus' || code === 'NumpadSubtract') { setUiScale(uiScale - UI_STEP); return; }
 
   if (mode === 'title') {
     if (overlay === 'help') { if (code === 'KeyH' || code === 'Escape') overlay = null; return; }
+    if (overlay === 'blueprints') { blueprintKey(code); return; }
+    if (code === 'KeyN') { overlay = 'blueprints'; return; }
     if (code === 'Digit1') titleDifficulty = 'easy';
     else if (code === 'Digit2') titleDifficulty = 'normal';
     else if (code === 'Digit3') titleDifficulty = 'hard';
@@ -4691,6 +4924,7 @@ function onKeyDown(e) {
   }
   // playing
   if (overlay) {
+    if (overlay === 'blueprints') { blueprintKey(code); return; }
     if (overlay === 'briefing') {
       // ENTER: command yourself · K: the AI captain carries out these orders · O: with the first officer's guidance
       if (code === 'Enter' || code === 'Escape') { if (game.ai.mode === 'demo' && code === 'Enter') setAiMode(game, 'off'); overlay = null; }
@@ -4714,6 +4948,7 @@ function onKeyDown(e) {
     case 'Escape': overlay = 'pause'; return;
     case 'KeyH': overlay = 'help'; return;
     case 'KeyI': overlay = 'stats'; return;
+    case 'KeyN': overlay = 'blueprints'; return;
     case 'KeyK': setAiMode(g, g.ai.mode === 'demo' ? 'off' : 'demo'); return;
     case 'KeyO': setAiMode(g, g.ai.mode === 'guide' ? 'off' : 'guide'); return;
   }
@@ -4741,6 +4976,13 @@ function onKeyDown(e) {
       command(g, 'tube', Number(code.slice(5)) - 1);
       break;
   }
+}
+
+function blueprintKey(code) {
+  const n = BLUEPRINTS.length;
+  if (code === 'ArrowRight' || code === 'KeyD') bpIndex = (bpIndex + 1) % n;
+  else if (code === 'ArrowLeft' || code === 'KeyA') bpIndex = (bpIndex + n - 1) % n;
+  else if (code === 'KeyN' || code === 'Escape') overlay = null;
 }
 
 function onKeyUp(e) {
@@ -4781,6 +5023,7 @@ function render(dt) {
   if (performance.now() - uiToast < 1500) text(c, `TEXT SIZE ${Math.round(uiScale * 100)}%`, W / 2, H * 0.08, C.yellow, FS * 1.3, 'center');
   if (overlay === 'briefing' && game) drawBriefing(c, game);
   else if (overlay === 'help') drawHelp(c);
+  else if (overlay === 'blueprints') drawBlueprints(c);
   else if (overlay === 'stats' && game) drawStats(c, game, `PATROL REPORT · PATROL ${game.patrol}`);
   else if (overlay === 'pause') drawPause(c);
   if (mode === 'over' && game) drawStats(c, game, `U-BOOT LOST · ${game.lostReason}`, game.ai.used ? 'THE AI CAPTAIN COMMANDED: SCORE NOT RECORDED' : game.scoreRank >= 0 ? `NEW HIGH SCORE: #${game.scoreRank + 1}` : '');

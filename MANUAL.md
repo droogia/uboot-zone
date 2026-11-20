@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.2. This manual explains every part of the control room, how the boat
+For game version v1.3. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -27,6 +27,7 @@ version; the in-game help (**H**) has the keys and a few reminders.
 17. [Quick reference](#17-quick-reference)
 18. [The AI captain and the first officer](#18-the-ai-captain-and-the-first-officer)
 19. [Screen and text size](#19-screen-and-text-size)
+20. [Blueprints](#20-blueprints)
 
 A note on time: the game runs **four times faster than real time** so that an attack
 takes minutes, not hours. Speeds are given in real knots and the boat behaves in proportion,
@@ -719,7 +720,8 @@ browser; they start after the first key press.
 | G | CRT effects on / off |
 | K | AI captain takes / gives back command (demo) |
 | O | First officer's guidance on / off |
-| + / - | Text size |
+| + / - | Text size (75% to 125%) |
+| N | Blueprints |
 | ENTER | Accept the orders / start a new game |
 | ESC | Pause (then Q to abandon the patrol) |
 
@@ -769,5 +771,26 @@ sailed with guidance are recorded in the high scores marked GUIDED.
 ## 19. Screen and text size
 
 The text and the panels grow with the window, so a 4K monitor gets 4K-sized lettering.
-**+** and **-** make all the text larger or smaller (60% to 250%); the setting is kept in
-the browser for next time.
+**+** and **-** make all the text larger or smaller in 5% steps, from 75% to 125% of that
+size; the setting is kept in the browser for next time.
+
+## 20. Blueprints
+
+![Blueprint of the Type VIIC](docs/manual/blueprints.png)
+
+**N** opens the recognition manual, on the title screen or during a patrol (the game pauses).
+It has a sheet for your own Type VIIC, the cargo steamer, the tanker, the Flower-class
+corvette, the V&W-class destroyer, the T-class submarine, the Sunderland and the Hudson,
+and the G7 torpedo. **←/→** (or **A/D**) turn the pages; **N** or **ESC** closes it.
+
+Each sheet shows the same wireframe the periscope draws, as:
+
+- a **side elevation** (bow to the right) with the waterline dashed in blue, and the length
+  and height in yellow;
+- a **plan** from above, at the same scale, with the beam (or the wingspan);
+- a **front view** and a slowly turning **3D view**;
+- the data that matter in the game (size, tonnage, speed, weapons, how many hits it takes)
+  and what to look for to recognise it.
+
+The grid is 5 m (1 m for the torpedo). The torpedo is drawn twice life size in the periscope;
+its sheet gives the real dimensions.

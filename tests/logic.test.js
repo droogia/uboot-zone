@@ -550,6 +550,7 @@ test('the torpedo model is whole segments and every ship got finer', () => {
   assert.equal(L.TORPEDO_MODEL.length % 6, 0);
   assert.ok(L.TORPEDO_MODEL.length / 6 > 40);
   for (const k of ['freighter', 'tanker', 'destroyer', 'corvette']) assert.ok(L.MODELS[k].length / 6 > 500, k);
+  assert.ok(L.MODELS.typevii.length / 6 > 150, 'our own Type VIIC');
 });
 
 test('a large gyro angle still hits: the solution allows for the torpedo turning off the bow', () => {

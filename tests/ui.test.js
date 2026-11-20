@@ -210,8 +210,41 @@ test('O gives the first officer\'s guidance; V, B and +/- work', async () => {
   const fs = app.peek('FS');
   app.press('Equal');
   assert.ok(app.peek('FS') >= fs);
-  assert.equal(app.peek('uiScale'), 1.1);
-  app.press('Minus');
+  assert.equal(app.peek('uiScale'), 1.05);
+  for (let i = 0; i < 10; i++) app.press('Equal');
+  assert.equal(app.peek('uiScale'), 1.25, 'at most 125%');
+  for (let i = 0; i < 20; i++) app.press('Minus');
+  assert.equal(app.peek('uiScale'), 0.75, 'at least 75%');
+  for (let i = 0; i < 5; i++) app.press('Equal');
   assert.equal(app.peek('uiScale'), 1);
+  assert.deepEqual(app.errors, []);
+});
+
+test('N opens the blueprints: every vessel and aircraft, cycled with the arrows', async () => {
+  const app = openApp();
+  await app.frames(2);
+  app.press('KeyN');
+  await app.frames(2);
+  assert.equal(app.peek('overlay'), 'blueprints');
+  assert.ok(app.texts.includes('U-BOOT TYPE VIIC'));
+  const n = app.peek('BLUEPRINTS.length');
+  const seen = new Set();
+  for (let i = 0; i < n; i++) {
+    seen.add(app.peek('BLUEPRINTS[bpIndex].kind'));
+    app.press('ArrowRight');
+    await app.frames(1);
+  }
+  assert.equal(seen.size, n);
+  assert.equal(app.peek('bpIndex'), 0, 'wraps round');
+  app.press('Escape');
+  assert.equal(app.peek('overlay'), null);
+  app.press('Enter');
+  await app.frames(2);
+  app.press('Enter');
+  const t = app.peek('game').time;
+  app.press('KeyN');
+  await app.frames(4);
+  assert.equal(app.peek('overlay'), 'blueprints');
+  assert.equal(app.peek('game').time, t, 'paused while reading');
   assert.deepEqual(app.errors, []);
 });

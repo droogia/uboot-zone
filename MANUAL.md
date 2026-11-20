@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.5. This manual explains every part of the control room, how the boat
+For game version v1.6. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -31,7 +31,7 @@ version; the in-game help (**H**) has the keys and a few reminders.
 21. [The deck gun](#21-the-deck-gun)
 22. [The chart](#22-the-chart)
 23. [What you hear](#23-what-you-hear)
-24. [Sea life and the CRT effects](#24-sea-life-and-the-crt-effects)
+24. [Clock, underwater light, sea life and the CRT effects](#24-clock-underwater-light-sea-life-and-the-crt-effects)
 
 A note on time: the game runs **four times faster than real time** so that an attack
 takes minutes, not hours. Speeds are given in real knots and the boat behaves in proportion,
@@ -79,7 +79,7 @@ water the boat runs on its battery and breathes the air it took down with it.
 | 12 | Torpedo tubes | [6](#6-torpedo-tubes-and-the-torpedo-data-computer) |
 | 13 | Status lamps | [7](#7-status-lamps) |
 | 14 | Torpedo data computer | [6](#6-torpedo-tubes-and-the-torpedo-data-computer) |
-| 15 | Mission, orders status, conditions and score | [13](#13-missions), [15](#15-patrols-score-and-difficulty) |
+| 15 | Mission, orders status, conditions, score and the clock | [13](#13-missions), [15](#15-patrols-score-and-difficulty) |
 | 16 | Command summary | [17](#17-quick-reference) |
 
 Everything you need to know about the boat is on these instruments: there is no separate
@@ -870,7 +870,17 @@ charges, torpedoes, aircraft), v1.4 adds:
   drip, more often the deeper you are.
 - **The deck gun**: crack, thump and an echo across the water; a dull boom for each hit.
 
-## 24. Sea life and the CRT effects
+## 24. Clock, underwater light, sea life and the CRT effects
+
+**The clock.** At the bottom right of the panel, a small analog clock shows the time of day
+on the patrol, with the sun, the setting sun or the moon on its face. Each patrol starts at a
+time that fits its conditions (morning to early afternoon by day, early evening at dusk,
+late at night) and the clock runs with game time: one game minute every 15 seconds.
+
+**Under water.** Just below periscope depth you look up at the underside of the waves. Their
+ripples are fixed to the compass, so they turn with the periscope. By day the surface throws
+a shimmering net of light (caustics) and shafts of sunlight down into the water; they lean
+away from the sun, fade with depth and are gone at night.
 
 **Sea life.** Below periscope depth, schools of fish swim at their own depths (between about
 10 and 140 m) and dart away from the hull when the boat comes close. On the surface, by day in

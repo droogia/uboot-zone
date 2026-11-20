@@ -47,7 +47,11 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
   depth-charge pistols before a close blast, the hull groaning in silent running, the deck
   gun.
 
-## Sea life
+## Clock and sea life
+
+A small analog clock at the bottom right shows the time of day on the patrol, with the sun or
+the moon on its face.
+
 
 Schools of fish below periscope depth (they scatter from the hull) and pods of dolphins
 leaping near the boat by day in a calm or moderate sea. Pure scenery.

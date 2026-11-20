@@ -737,3 +737,25 @@ test('periscope training accelerates: a tap is a fine move, holding reaches full
   const full = L.SUB.scopeRate * 0.3;
   assert.ok(p.scopeBearing > full * 2, `held for 3 s: ${p.scopeBearing}°`);
 });
+
+// ---------------------------------------------------------------- v1.6
+
+test('the patrol clock fits the conditions and runs with game time', () => {
+  for (const time of ['day', 'dusk', 'night']) {
+    const g = L.createGame({ seed: 7, noPatrol: true });
+    g.cond = L.makeConditions(time, 'calm', false);
+    L.startPatrol(g, 'duel');
+    g.cond = L.makeConditions(time, 'calm', false);
+    g.clock.start = time === 'day' ? 600 : time === 'dusk' ? 1100 : 1400;
+    const m0 = L.clockMinutes(g);
+    run(g, 15);                                       // 15 real s = 60 game s
+    assert.ok(Math.abs(((L.clockMinutes(g) - m0 + 1440) % 1440) - 1) < 0.05, 'one game minute');
+  }
+});
+
+test('cracks in the glass are jagged polylines with branches', () => {
+  const g = emptySea();
+  L.addCrack(g, 30);
+  assert.ok(g.player.cracks.length >= 2, 'main line and at least one branch');
+  assert.ok(g.player.cracks[0].length >= 15);
+});

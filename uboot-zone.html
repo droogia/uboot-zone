@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.5';
+const VERSION = '001.6';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -878,6 +878,9 @@ function startPatrol(g, type) {
   const b = rng() * 360;
   const spawn = { convoy: spawnConvoy, duel: spawnDuel, hunters: spawnHunters, anchorage: spawnAnchorage }[type];
   const intel = spawn(g, n, b);
+  // The patrol's clock: a time of day that fits the conditions, varied from patrol to patrol.
+  const t0 = g.cond.time === 'day' ? 8 * 60 + (n * 47) % 300 : g.cond.time === 'dusk' ? 18 * 60 + 10 + (n * 13) % 40 : 22 * 60 + (n * 29) % 240;
+  g.clock = { start: t0, at: g.time };
   // What U-boat command told us goes on the chart.
   if (type === 'convoy') g.plot.intel = { x: g.convoy.x, y: g.convoy.y, r: 1500, label: 'CONVOY REPORTED', course: g.convoy.course };
   else if (type === 'hunters') {
@@ -1822,19 +1825,32 @@ function stepShells(g, dt) {
   g.shells = g.shells.filter(s => !s.done);
 }
 
+// A crack in the periscope glass: a jagged main line with a few branches. Each polyline is
+// stored separately; their own random stream keeps the game's sequence short.
 function addCrack(g, dmg) {
   const p = g.player;
-  if (p.cracks.length > 6) return;
-  const rng = g.rng;
-  const pts = [[rng.range(-0.8, 0.8), rng.range(-0.6, 0.6)]];
-  const segs = 4 + Math.floor(dmg / 6);
-  let a = rng() * TAU;
-  for (let i = 0; i < segs; i++) {
-    a += rng.range(-0.8, 0.8);
-    const last = pts[pts.length - 1];
-    pts.push([last[0] + Math.cos(a) * rng.range(0.05, 0.15), last[1] + Math.sin(a) * rng.range(0.05, 0.15)]);
+  if (p.cracks.length > 24) return;
+  const rng = makeRng(Math.floor(g.rng() * 1e9));
+  const walk = (x, y, a, n, step) => {
+    const pts = [[x, y]];
+    for (let i = 0; i < n; i++) {
+      // short straight runs with sharp kinks: how glass breaks
+      a += rng() < 0.3 ? rng.range(-1.3, 1.3) : rng.range(-0.35, 0.35);
+      const l = rng.range(step * 0.4, step * 1.3);
+      x += Math.cos(a) * l; y += Math.sin(a) * l;
+      pts.push([x, y]);
+    }
+    return pts;
+  };
+  const a0 = rng() * TAU;
+  const main = walk(rng.range(-0.8, 0.8), rng.range(-0.6, 0.6), a0, 10 + Math.floor(dmg / 3), 0.035);
+  p.cracks.push(main);
+  const branches = 1 + Math.floor(rng() * (1 + dmg / 15));
+  for (let b = 0; b < branches; b++) {
+    const k = 1 + Math.floor(rng() * (main.length - 2));
+    const side = rng() < 0.5 ? -1 : 1;
+    p.cracks.push(walk(main[k][0], main[k][1], a0 + side * rng.range(0.6, 1.4), 4 + Math.floor(rng() * 6), 0.025));
   }
-  p.cracks.push(pts);
 }
 
 function endPatrol(g, won, text) {
@@ -1883,6 +1899,12 @@ function stepPatrol(g, dt) {
       startPatrol(g);
     }
   }
+}
+
+// Time of day in minutes (0 - 1439).
+function clockMinutes(g) {
+  const k = g.clock || { start: 600, at: 0 };
+  return ((k.start + (g.time - k.at) / 60) % 1440 + 1440) % 1440;
 }
 
 function missionStatus(g) {
@@ -3456,6 +3478,8 @@ function drawSea(c, g, r, cam) {
     const bandsS = [[], [], []];
     for (let ri = 0; ri < rows.length; ri++) {
       const D = rows[ri] * (1 + 0.04 * Math.sin(t * 0.3 + ri));
+      // At high power the foreground rows are short, flat crest dashes: crossing undulations would flicker like a helix.
+      const calmFg = cam.fov < 20 && D < 160;
       const band = D < 200 ? 0 : D < 700 ? 1 : 2;
       const near = D < 50;
       let drawing = false;
@@ -3466,11 +3490,11 @@ function drawSea(c, g, r, cam) {
         const ph = (wx * cdx + wy * cdy) / wl * TAU - t * spd + hash3(ri, 0, 7) * 6;
         const lat = wx * cdy - wy * cdx;
         const zk = 700 / cam.F;                               // keeps the pattern's size on screen the same at either power
-        const h = amp * (D < 50 ? 0.6 : 1) * (Math.sin(ph) + 0.35 * Math.sin(lat / (D * 0.035 * zk) + t * 0.7 + ri));
+        const h = amp * (D < 50 ? 0.6 : 1) * (calmFg ? 0.5 * Math.sin(ph) : Math.sin(ph) + 0.35 * Math.sin(lat / (D * 0.035 * zk) + t * 0.7 + ri));
         // only the crests are drawn, broken up by a second, slower pattern
         // broken into crests of about the same length on screen, whatever the distance and power
         const gate = D * 0.05 * zk;
-        const crest = Math.sin(ph) > (near ? 0.55 : 0.35) && Math.sin(lat / gate + ri * 1.7 + t * 0.2) > (near ? 0.1 : -0.2);
+        const crest = Math.sin(ph) > (calmFg ? 0.8 : near ? 0.55 : 0.35) && Math.sin(lat / gate + ri * 1.7 + t * 0.2) > (calmFg ? 0.4 : near ? 0.1 : -0.2);
         const y = cam.cy - (h - cam.h) / D * cam.F;
         if (crest) { arr.push(drawing ? 1 : 0, cam.cx + sx, y); drawing = true; }
         else drawing = false;
@@ -3825,22 +3849,53 @@ function drawUnderwater(c, g, r, cam) {
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   c.fillStyle = 'rgba(0,18,40,0.55)';
   c.fillRect(r.x, r.y, r.w, r.h);
-  // light from the surface
+  // the surface overhead: its ripples are fixed to the compass, so they turn with the view
+  const brgAt = x => cam.yawDeg + Math.atan((x - cx) / cam.F) / DEG;
   if (p.depth < 60) {
     const k = 1 - (p.depth - 10) / 50;
     const ys = r.y + r.h * 0.42 * k;
     c.beginPath();
-    for (let x = r.x; x <= r.x + r.w; x += 24) {
-      const y = ys + Math.sin(x * 0.015 + t * 1.5) * 6 + Math.sin(x * 0.041 - t) * 3;
+    for (let x = r.x; x <= r.x + r.w; x += 12) {
+      const b = brgAt(x) * DEG;
+      const y = ys + Math.sin(b * 14 + t * 1.5) * 6 + Math.sin(b * 37 - t) * 3;
       if (x === r.x) c.moveTo(x, y); else c.lineTo(x, y);
     }
     stroke(c, C.blue, LW * 1.4, 0.8 * k);
-    c.beginPath();
-    for (let i = 0; i < 14; i++) {
-      const x = r.x + ((i * 137 + t * 12) % r.w);
-      line(c, x, ys, x - r.h * 0.15, ys + r.h * (0.25 + 0.2 * Math.sin(i + t * 0.7)));
+    const cond = g.cond;
+    if (cond.time !== 'night') {
+      // caustics: the shimmering net of light just under the waves
+      c.beginPath();
+      for (let i = 0; i < 70; i++) {
+        const b0 = Math.floor(cam.yawDeg) - 40 + hash3(i, 1, 21) * 80;
+        const a = angleDiff(b0, cam.yawDeg);
+        const x = cx + Math.tan(a * DEG) * cam.F, y = ys + 8 + hash3(i, 2, 21) * r.h * 0.12;
+        const w = 10 + hash3(i, 3, 21) * 26, ph = t * 1.7 + i;
+        line(c, x - w / 2, y + Math.sin(ph) * 3, x, y + Math.sin(ph + 1.5) * 3);
+        line(c, x, y + Math.sin(ph + 1.5) * 3, x + w / 2, y + Math.sin(ph + 3) * 3);
+      }
+      stroke(c, C.blue, LW, 0.22 * k * (cond.time === 'dusk' ? 0.5 : 1));
+      // shafts of sunlight: fixed bearings, leaning away from the sun, fading with depth
+      const sunAz = cond.time === 'dusk' ? 262 : 205;
+      const lean = Math.sin(angleDiff(sunAz, cam.yawDeg) * DEG) * -0.45;
+      const len = r.h * (0.35 + 0.35 * k);
+      for (let i = 0; i < 36; i++) {
+        const b = i * 10 + hash3(i, 4, 21) * 6;
+        const a = angleDiff(b, cam.yawDeg);
+        if (Math.abs(a) > cam.fov / 2 + 8) continue;
+        const x = cx + Math.tan(a * DEG) * cam.F;
+        const flick = 0.55 + 0.45 * Math.sin(t * (0.4 + hash3(i, 5, 21) * 0.5) + i);
+        const wdt = (4 + hash3(i, 6, 21) * 10) * (cam.F / 700);
+        for (let sgm = 0; sgm < 4; sgm++) {
+          const f0 = sgm / 4, f1 = (sgm + 1) / 4;
+          c.beginPath();
+          c.moveTo(x - wdt / 2 + lean * len * f0, ys + len * f0);
+          c.lineTo(x - wdt / 2 + lean * len * f1 - wdt * 0.3 * f1, ys + len * f1);
+          c.moveTo(x + wdt / 2 + lean * len * f0, ys + len * f0);
+          c.lineTo(x + wdt / 2 + lean * len * f1 + wdt * 0.3 * f1, ys + len * f1);
+          stroke(c, C.blue, LW, 0.16 * k * flick * (1 - f0) * (cond.time === 'dusk' ? 0.5 : 1) * (cond.fog ? 0.5 : 1));
+        }
+      }
     }
-    stroke(c, C.blue, LW, 0.18 * k);
   }
   // thermocline layer
   if (Math.abs(p.depth - THERMOCLINE) < 45) {
@@ -4667,15 +4722,62 @@ function drawRight(c, g, r) {
   // score
   const sy = r.y + r.h - lh * 1.1;
   c.beginPath(); line(c, r.x + pad, sy - lh * 2.9, r.x + r.w - pad, sy - lh * 2.9); stroke(c, C[INK], LW, 0.3);
+  const cR = lh * 1.2, ccx = r.x + r.w - pad - cR, ccy = sy - lh * 1.25;
   const fitText = (str, yy, color, size) => {
     c.font = font(size, true);
-    const w = c.measureText(str).width, max = r.w - pad * 2;
+    const w = c.measureText(str).width, max = r.w - pad * 3 - cR * 2;
     text(c, str, r.x + pad, yy, color, w > max ? size * max / w : size);
   };
   fitText(`PATROL ${g.patrol} · ${g.mission.name}`, sy - lh * 2.1, C[INK], FS * 0.85);
   fitText(missionStatus(g), sy - lh * 1.05, C.yellow, FS * 0.8);
-  text(c, conditionsText(g.cond), r.x + pad, sy, rgba(INK, 0.75), FS * 0.72);
-  text(c, `${fmtInt(score(g))}`, r.x + r.w - pad, sy, C.yellow, FS, 'right');
+  fitText(conditionsText(g.cond), sy, rgba(INK, 0.75), FS * 0.72);
+  text(c, `${fmtInt(score(g))}`, ccx - cR - pad * 0.7, sy, C.yellow, FS, 'right');
+  drawClock(c, g, ccx, ccy, cR);
+}
+
+// Small analog clock with the sun or the moon on its face.
+function drawClock(c, g, x, y, R) {
+  const m = clockMinutes(g);
+  c.beginPath();
+  c.arc(x, y, R, 0, TAU);
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * TAU, k = i % 3 === 0 ? 0.78 : 0.88;
+    line(c, x + Math.sin(a) * R * k, y - Math.cos(a) * R * k, x + Math.sin(a) * R * 0.97, y - Math.cos(a) * R * 0.97);
+  }
+  stroke(c, C[INK], LW, 0.8);
+  // the sky icon, in the upper half of the face
+  const ix = x, iy = y - R * 0.42, ir = R * 0.17;
+  const time = g.cond.time;
+  c.beginPath();
+  if (time === 'night') {
+    c.arc(ix, iy, ir, Math.PI * 0.35, Math.PI * 1.65);
+    c.arc(ix + ir * 0.55, iy, ir * 0.85, Math.PI * 1.45, Math.PI * 0.55, true);
+    stroke(c, C.white, LW, 0.9);
+  } else if (time === 'dusk') {
+    c.arc(ix, iy + ir * 0.4, ir, Math.PI, 0);
+    line(c, ix - ir * 1.7, iy + ir * 0.4, ix + ir * 1.7, iy + ir * 0.4);
+    for (const a of [-2.4, -1.57, -0.75]) line(c, ix + Math.cos(a) * ir * 1.35, iy + ir * 0.4 + Math.sin(a) * ir * 1.35, ix + Math.cos(a) * ir * 1.8, iy + ir * 0.4 + Math.sin(a) * ir * 1.8);
+    stroke(c, C.orange, LW, 0.9);
+  } else {
+    c.arc(ix, iy, ir * 0.75, 0, TAU);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU;
+      line(c, ix + Math.cos(a) * ir * 1.05, iy + Math.sin(a) * ir * 1.05, ix + Math.cos(a) * ir * 1.5, iy + Math.sin(a) * ir * 1.5);
+    }
+    stroke(c, C.yellow, LW, 0.9);
+  }
+  // hands
+  const ha = ((m / 60) % 12) / 12 * TAU, ma = (m % 60) / 60 * TAU;
+  c.beginPath();
+  line(c, x, y, x + Math.sin(ha) * R * 0.5, y - Math.cos(ha) * R * 0.5);
+  stroke(c, C[INK], LW * 2, 1);
+  c.beginPath();
+  line(c, x, y, x + Math.sin(ma) * R * 0.82, y - Math.cos(ma) * R * 0.82);
+  stroke(c, C[INK], LW * 1.2, 1);
+  c.beginPath();
+  c.arc(x, y, Math.max(1.5, LW * 1.3), 0, TAU);
+  c.fillStyle = C[INK];
+  c.fill();
 }
 
 // Command line: three sections of two rows. Left: interface options. Middle: the boat's

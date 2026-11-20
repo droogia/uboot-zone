@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.7';
+const VERSION = '001.7.1';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -4761,7 +4761,14 @@ function drawRight(c, g, r) {
   let y = r.y + lh * 0.8;
   const pinging = !!g.sonar.ping;
   text(c, `SONAR · ${pinging ? 'ACTIVE PING' : 'PASSIVE'} · ${SONAR_RANGE / 1000} KM`, r.x + r.w / 2, y, pinging ? C.white : C[INK], FS * 0.85, 'center');
-  const sr = Math.min(r.w / 2 - pad - FS * 1.6, r.h * 0.19);
+  // The sonar scope takes what the other sections leave, so nothing collides at large text sizes.
+  const tw0 = (r.w - pad * 2) / 5;
+  const fixed = lh * 2.2 + FS * 3                                        // title, bearings, HDG/SCOPE line
+    + lh * 3.7 + Math.min(tw0 * 0.56, FS * 1.6) + FS * 2                  // tubes, gyro, deck gun
+    + lh * 0.9 + 4 * (FS * 1.45 + 4)                                      // lamps
+    + lh * 1.7 + lh * 4.6                                                 // torpedo data computer, at its fullest
+    + lh * 5.2 + lh * 0.4;                                                // mission, date and clock, and a gap
+  const sr = clamp((r.h - fixed) / 2, FS * 2.2, Math.min(r.w / 2 - pad - FS * 1.6, r.h * 0.19));
   y += lh * 0.6;
   drawSonar(c, g, r.x + r.w / 2, y + sr + FS * 1.5, sr);
   y += sr * 2 + FS * 3;
@@ -4812,8 +4819,12 @@ function drawRight(c, g, r) {
   {
     const gs = gunState(g);
     text(c, 'DECK GUN 88', r.x + pad, y, C[INK], FS * 0.8);
-    text(c, gs.why, r.x + r.w / 2 + pad, y, gs.ok ? C[INK] : gs.loading ? C.yellow : rgba(INK, 0.5), FS * 0.8);
-    text(c, `${p.gunAmmo} RDS`, r.x + r.w - pad, y, p.gunAmmo > 20 ? C[INK] : C.yellow, FS * 0.8, 'right');
+    const ammo = `${p.gunAmmo} RDS`;
+    c.font = font(FS * 0.8, true);
+    const room = r.x + r.w - pad - c.measureText(ammo).width - pad * 0.8 - (r.x + r.w / 2 + pad);
+    const ws = c.measureText(gs.why).width;
+    text(c, gs.why, r.x + r.w / 2 + pad, y, gs.ok ? C[INK] : gs.loading ? C.yellow : rgba(INK, 0.5), ws > room ? FS * 0.8 * room / ws : FS * 0.8);
+    text(c, ammo, r.x + r.w - pad, y, p.gunAmmo > 20 ? C[INK] : C.yellow, FS * 0.8, 'right');
     y += lh;
   }
 
@@ -4887,14 +4898,20 @@ function drawRight(c, g, r) {
   c.beginPath(); line(c, r.x + pad, sy - lh * 4.1, r.x + r.w - pad, sy - lh * 4.1); stroke(c, C[INK], LW, 0.3);
   // right: the flap calendar over the clock
   const cR = lh * 1.2, ccx = r.x + r.w - pad - cR, ccy = sy - lh * 1.25;
-  const calW = drawFlapCalendar(c, g, r.x + r.w - pad, sy - lh * 3.85, lh * 1.15);
+  const calW = drawFlapCalendar(c, g, r.x + r.w - pad, sy - lh * 3.85, lh * 1.15, r.w * 0.4);
   const fitText = (str, yy, color, size, reserve) => {
     c.font = font(size, true);
     const w = c.measureText(str).width, max = r.w - pad * 3 - reserve;
     text(c, str, r.x + pad, yy, color, w > max ? size * max / w : size);
   };
   fitText(`PATROL ${g.patrol} · ${g.mission.name}`, sy - lh * 3.3, C[INK], FS * 0.85, calW);
-  if (g.calendar) fitText(`${g.calendar.place} · ${latLonText(g.calendar.lat, g.calendar.lon)}`, sy - lh * 2.25, rgba(INK, 0.8), FS * 0.72, calW);
+  if (g.calendar) {
+    // the area and position; when that does not fit at a readable size, the area alone
+    const full = `${g.calendar.place} · ${latLonText(g.calendar.lat, g.calendar.lon)}`;
+    c.font = font(FS * 0.72, true);
+    const room = r.w - pad * 3 - cR * 2;
+    fitText(c.measureText(full).width * 0.8 > room ? g.calendar.place : full, sy - lh * 2.25, rgba(INK, 0.8), FS * 0.72, cR * 2);
+  }
   fitText(missionStatus(g), sy - lh * 1.1, C.yellow, FS * 0.8, cR * 2);
   fitText(conditionsText(g.cond), sy, rgba(INK, 0.75), FS * 0.72, cR * 2 + FS * 4);
   text(c, `${fmtInt(score(g))}`, ccx - cR - pad * 0.7, sy, C.yellow, FS, 'right');
@@ -4903,8 +4920,12 @@ function drawRight(c, g, r) {
 
 // Split-flap calendar: day, month, year on three flaps, right-aligned at x. Returns its width.
 let flapShown = '', flapT = -10, flapOld = '';
-function drawFlapCalendar(c, g, xr, y, h) {
+function drawFlapCalendar(c, g, xr, y, h, maxW) {
   if (!g.calendar) return 0;
+  // in a narrow panel the flaps get smaller, so the patrol's name keeps room to be read
+  c.font = font(h * 0.62, true);
+  const est = ['00', 'MAR', '1941'].reduce((a, t) => a + c.measureText(t).width + h * 0.62 * 0.7, 0) + h * 0.18 * 2;
+  if (maxW && est > maxW) { const k = maxW / est; y += h * (1 - k) / 2; h *= k; }
   const d = new Date(g.calendar.day + Math.floor(clockMinutes(g) < g.clock.start ? 1 : 0) * DAY_MS);
   const parts = [String(d.getUTCDate()).padStart(2, '0'), MONTHS[d.getUTCMonth()], String(d.getUTCFullYear())];
   const key = parts.join(' ');

@@ -248,3 +248,27 @@ test('N opens the blueprints: every vessel and aircraft, cycled with the arrows'
   assert.equal(app.peek('game').time, t, 'paused while reading');
   assert.deepEqual(app.errors, []);
 });
+
+test('L shows the chart (↑/↓ change its scale) and E fires the deck gun', async () => {
+  const app = openApp();
+  await app.frames(2);
+  app.press('Enter');
+  await app.frames(2);
+  app.press('Enter');
+  const g = app.peek('game');
+  app.press('KeyL');
+  await app.frames(3);
+  assert.equal(app.peek('chartOn'), true);
+  assert.ok(app.texts.some(t => t.startsWith('CHART · NORTH UP')));
+  const sc = app.peek('chartScale');
+  app.press('ArrowDown');
+  assert.equal(app.peek('chartScale'), sc + 1);
+  assert.equal(g.player.zoom, 0, 'arrows do not touch the periscope while the chart is up');
+  app.press('KeyL');
+  assert.equal(app.peek('chartOn'), false);
+  app.press('KeyE');
+  assert.ok(g.messages.some(m => /DECK GUN/.test(m.text)), 'refused while submerged');
+  await app.frames(2);
+  assert.ok(app.texts.includes('DECK GUN 88'));
+  assert.deepEqual(app.errors, []);
+});

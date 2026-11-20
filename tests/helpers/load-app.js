@@ -28,7 +28,7 @@ function loadLogic() {
     'createGame', 'startPatrol', 'makeShip', 'command', 'step', 'scopeAvailable', 'viewHeading',
     'firingSolution', 'fireTorpedo', 'escortDetect', 'sinkShip', 'damagePlayer',
     'makeConditions', 'visualRange', 'missionStatus', 'subDetect', 'fireEnemySalvo', 'spawnPlane', 'score',
-    'AI', 'aiPlan', 'guideStep', 'setAiMode', 'updateAI', 'TORPEDO_MODEL', 'DEPTH_STEPS', 'CRASH_DIVE_DEPTH',
+    'AI', 'aiPlan', 'GUN', 'gunState', 'fireGun', 'plotEstimate', 'guideStep', 'setAiMode', 'updateAI', 'TORPEDO_MODEL', 'DEPTH_STEPS', 'CRASH_DIVE_DEPTH',
   ];
   return new Function(logic + '\nreturn { ' + exported.join(', ') + ' };')();
 }

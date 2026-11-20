@@ -154,11 +154,12 @@ test('the periscope works only near periscope depth or surfaced', () => {
   assert.equal(L.scopeAvailable(g), true);
   p.depth = 30;
   assert.equal(L.scopeAvailable(g), false);
-  p.depth = 0;
-  assert.equal(L.scopeAvailable(g), true);
+  p.depth = L.PERISCOPE_DEPTH;
   L.command(g, 'periscope');
   run(g, 1);
-  assert.equal(L.scopeAvailable(g), false);
+  assert.equal(L.scopeAvailable(g), false, 'periscope lowered at periscope depth');
+  p.depth = 0;
+  assert.equal(L.scopeAvailable(g), true, 'surfaced, the bridge watch sees anyway');
 });
 
 test('battery drains submerged and recharges surfaced; air refills on the surface', () => {
@@ -655,4 +656,68 @@ test('aircraft about: the planner never leaves the boat shallow', () => {
   const plan = L.aiPlan(g);
   assert.ok(plan.depth >= L.CRASH_DIVE_DEPTH);
   assert.equal(plan.scopeUp, false);
+});
+
+// ---------------------------------------------------------------- v1.4
+
+test('deck gun: only surfaced with the crew at the gun, hits wear a ship down, and the bang alerts the escorts', () => {
+  const g = emptySea({ diffOverrides: { dudChance: 0 } });
+  const p = g.player;
+  const s = L.makeShip(g, 'freighter', 0, 1200, 90, 0);
+  const esc = L.makeShip(g, 'corvette', 6000, 0, 0, 8);
+  s.grt = 5000;
+  L.command(g, 'lock');
+  assert.equal(L.fireGun(g), false, 'submerged');
+  p.depth = 0; p.orderedDepth = 0;
+  run(g, 1);
+  assert.match(L.gunState(g).why, /MANNING/);
+  run(g, 8);
+  assert.equal(L.gunState(g).ok, true);
+  const ammo = p.gunAmmo;
+  for (let i = 0; i < 60 && !s.sinking; i++) { L.fireGun(g); run(g, 1.5); }
+  assert.ok(s.sinking, 'sunk by gunfire');
+  assert.ok(g.stats.shellHits >= 5 && p.gunAmmo < ammo);
+  assert.notEqual(esc.ai.state, 'escort', 'the escort heard it');
+});
+
+test('deck gun: no gun in a storm', () => {
+  const g = emptySea();
+  g.cond = L.makeConditions('day', 'storm', false);
+  g.player.depth = 0; g.player.surfacedT = 100;
+  assert.match(L.gunState(g).why, /SEA TOO HEAVY/);
+});
+
+test('the AI captain surfaces and finishes a damaged straggler with the deck gun', () => {
+  const g = L.createGame({ seed: 5, noPatrol: true, ai: 'demo' });
+  g.patrolState = 'active';
+  g.mission = { type: 'convoy', name: 'X', timer: 0 };
+  const s = L.makeShip(g, 'freighter', 800, 3500, 90, 4);
+  s.hp = 1; s.maxHp = 2; s.burning = true;
+  for (let i = 0; i < 30 * 200 && !s.sinking; i++) L.step(g, 1 / 30, {});
+  assert.ok(s.sinking);
+  assert.ok(g.stats.shells > 0 && g.stats.fired === 0, 'with the gun, not torpedoes');
+});
+
+test('the plot: sightings build a contact with estimated course and speed', () => {
+  const g = emptySea();
+  g.player.telegraph = L.TELEGRAPH_STOP; g.player.speed = 0;
+  const s = L.makeShip(g, 'freighter', 0, 3000, 90, 8);
+  s.targetSpeed = 8;
+  run(g, 40);
+  const c = g.plot.contacts[s.id];
+  assert.ok(c && c.name === 'Cargo steamer');
+  const est = L.plotEstimate(c);
+  assert.ok(est, 'estimate');
+  assert.ok(Math.abs(L.angleDiff(est.course, 90)) < 15, `course ${est.course}`);
+  assert.ok(Math.abs(est.speed - 8) < 2, `speed ${est.speed}`);
+  assert.ok(g.plot.track.length > 0);
+});
+
+test('the plot never shows what the boat cannot see or hear', () => {
+  const g = emptySea();
+  g.player.depth = 60;
+  const s = L.makeShip(g, 'tclass', 0, 9000, 90, 2);
+  s.depth = 60;
+  run(g, 20);
+  assert.equal(g.plot.contacts[s.id], undefined);
 });

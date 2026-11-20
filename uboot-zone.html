@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.3';
+const VERSION = '001.4';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -727,6 +727,10 @@ function createGame(opts = {}) {
       noiseSpike: 0,
       tubes: [0, 1, 2, 3, 4].map(() => ({ state: 'ready', t: 0 })),
       reserve: TORPEDO.maxReserve,
+      gunAmmo: GUN.ammo,
+      gunT: 0,                      // game seconds until the next round is loaded
+      surfacedT: 0,                 // game seconds since surfacing (the gun crew needs time)
+      gunWalk: null,
       selectedTube: 0,
       lock: null,
       cracks: [],
@@ -736,6 +740,8 @@ function createGame(opts = {}) {
     torpedoes: [],
     charges: [],
     shells: [],
+    ownShells: [],                  // our deck gun's rounds in flight
+    plot: plotInit(),
     effects: [],
     planes: [],
     mines: [],
@@ -760,7 +766,7 @@ function createGame(opts = {}) {
       sunk: { freighter: 0, tanker: 0, corvette: 0, destroyer: 0, tclass: 0 },
       tonnage: 0, bonus: 0, chargesNear: 0, damageTaken: 0, maxDepth: PERISCOPE_DEPTH,
       timeSubmerged: 0, pings: 0, patrolsDone: 0, missionsWon: 0,
-      airAttacks: 0, torpedoesDodged: 0, torpedoHits: 0, minesHit: 0,
+      airAttacks: 0, torpedoesDodged: 0, torpedoHits: 0, minesHit: 0, shells: 0, shellHits: 0,
     },
   };
   g.ai = aiInit(opts.ai);
@@ -845,6 +851,10 @@ function startPatrol(g, type) {
   g.ships = [];
   g.charges = [];
   g.shells = [];
+  g.ownShells = [];
+  g.plot.contacts = {};
+  g.plot.mines = {};
+  g.plot.blasts = [];
   g.planes = [];
   g.mines = [];
   g.torpedoes = [];
@@ -867,6 +877,13 @@ function startPatrol(g, type) {
   const b = rng() * 360;
   const spawn = { convoy: spawnConvoy, duel: spawnDuel, hunters: spawnHunters, anchorage: spawnAnchorage }[type];
   const intel = spawn(g, n, b);
+  // What U-boat command told us goes on the chart.
+  if (type === 'convoy') g.plot.intel = { x: g.convoy.x, y: g.convoy.y, r: 1500, label: 'CONVOY REPORTED', course: g.convoy.course };
+  else if (type === 'hunters') {
+    const es = g.ships.filter(x => x.role === 'escort');
+    const mx = es.reduce((a, x) => a + x.x, 0) / es.length, my = es.reduce((a, x) => a + x.y, 0) / es.length;
+    g.plot.intel = { x: mx, y: my, r: 1500, label: 'HUNTER GROUP REPORTED' };
+  } else g.plot.intel = { x: g.area.x, y: g.area.y, r: type === 'duel' ? 2500 : 1000, label: type === 'duel' ? 'SUBMARINE REPORTED' : 'ANCHORAGE', mines: type === 'anchorage' ? MINE.rings : null };
   g.air = { on: g.cond.airOps && (type === 'hunters' || type === 'anchorage' || (type === 'convoy' && n >= 2)), nextT: rng.range(150, 320) };
   g.patrolState = 'active';
   g.briefing = {
@@ -1018,9 +1035,10 @@ function placeOnStation(g, s) {
 /* =========================================================
    PLAYER COMMANDS
    ========================================================= */
+// Surfaced, the bridge watch sees whether the periscope is up or not.
 function scopeAvailable(g) {
   const p = g.player;
-  return p.alive && p.periscopeRaise > 0.9 && p.depth <= PERISCOPE_MAX;
+  return p.alive && (p.depth <= SURFACED_DEPTH || (p.periscopeRaise > 0.9 && p.depth <= PERISCOPE_MAX));
 }
 
 function viewHeading(g) {
@@ -1085,6 +1103,7 @@ function command(g, cmd, arg) {
     case 'fire': fireTorpedo(g); break;
     case 'lock': toggleLock(g); break;
     case 'ping': activePing(g); break;
+    case 'gun': fireGun(g); break;
   }
 }
 
@@ -1326,6 +1345,8 @@ function stepSim(g, dt) {
   stepTorpedoes(g, dt);
   stepCharges(g, dt);
   stepShells(g, dt);
+  stepOwnShells(g, dt);
+  updatePlot(g, dt);
   stepMines(g, dt);
   stepPatrol(g, dt);
 }
@@ -1726,6 +1747,7 @@ function sinkShip(g, s) {
     secondary: s.kind === 'tanker' ? 6 : 0,
   };
   g.stats.sunk[s.kind]++;
+  if (g.plot.contacts[s.id]) g.plot.contacts[s.id].sunk = true;
   g.stats.tonnage += s.grt;
   const unit = s.role === 'merchant' ? 'GRT' : 'TONS';
   say(g, `${s.name} IS SINKING! +${s.grt.toLocaleString('en-US')} ${unit}`, 'green');
@@ -1763,6 +1785,7 @@ function stepCharges(g, dt) {
     if (p.alive && d < 250) g.stats.chargesNear++;
     spawnGeyser(g, c.x, c.y, clamp(45 * (1 - c.depth / 90), 4, 45), 3.5);
     g.blast = { x: c.x, y: c.y, t: g.time };
+    g.plot.blasts.push({ x: c.x, y: c.y, t: g.time });
     emit(g, 'charge', { dist: d, damage: dmg });
     if (dmg > 0.5) {
       if (dmg > 12) addCrack(g, dmg);
@@ -1847,6 +1870,7 @@ function stepPatrol(g, dt) {
     if (g.patrolTimer <= 0) {
       g.stats.patrolsDone++;
       p.reserve = Math.min(TORPEDO.maxReserve, p.reserve + 7);
+      p.gunAmmo = Math.min(GUN.ammo, p.gunAmmo + 60);
       p.hull = Math.min(100, p.hull + 25);
       p.cracks = [];
       say(g, 'RESUPPLIED: TORPEDOES RELOADED, HULL PATCHED', 'blue');
@@ -2211,6 +2235,13 @@ function sonarSources(g) {
   return out;
 }
 
+// Sonar contacts go on the plot: ships, submarines and torpedoes as contacts, mines as marks.
+function plotBlip(g, b) {
+  if (b.type === 'mine') g.plot.mines[b.id] = { x: b.x, y: b.y };
+  else if (b.type === 'surface' || b.type === 'sub') plotContact(g, b.id, b.x, b.y, b.type, b.active);
+  else if (b.type === 'torpedo' && !b.own) plotContact(g, b.id, b.x, b.y, 'torpedo', b.active);
+}
+
 function updateSonar(g, dt) {
   const so = g.sonar, p = g.player;
   const prev = so.sweep;
@@ -2230,6 +2261,7 @@ function updateSonar(g, dt) {
     const bb = (b + bErr) * DEG;
     so.blips = so.blips.filter(x => !(x.id === src.id && !x.active));
     so.blips.push({ id: src.id, x: p.x + Math.sin(bb) * r * rErr, y: p.y + Math.cos(bb) * r * rErr, type: src.type, t: g.realTime, active: false, fuzz: r * 0.08, heading: src.heading, own: src.own });
+    plotBlip(g, so.blips[so.blips.length - 1]);
   }
   if (so.ping) {
     const r0 = so.ping.r;
@@ -2240,6 +2272,7 @@ function updateSonar(g, dt) {
       if (src.type === 'mine' && r > 3000) continue;
       so.blips = so.blips.filter(x => x.id !== src.id || !x.active);
       so.blips.push({ id: src.id, x: src.x, y: src.y, type: src.type, t: g.realTime, active: true, fuzz: 0, heading: src.heading, own: src.own });
+      plotBlip(g, so.blips[so.blips.length - 1]);
       if (src.type === 'surface') emit(g, 'echo', { dist: r });
     }
     if (so.ping.r > SONAR_RANGE) so.ping = null;
@@ -2263,6 +2296,170 @@ function updateSonar(g, dt) {
     say(g, 'WE HAVE BEEN DETECTED!', 'red');
     emit(g, 'detected');
   }
+}
+
+/* =========================================================
+   DECK GUN (88 mm) AND THE PLOT (what the chart shows)
+   ========================================================= */
+const GUN = {
+  range: 4000,               // m
+  reload: 5,                 // game seconds between rounds
+  ammo: 120,
+  manTime: 30,               // game seconds after surfacing to clear away the gun
+  shellSpeed: 750,           // m/s
+};
+
+function gunState(g) {
+  const p = g.player;
+  if (!p.alive) return { ok: false, why: 'NO GUN' };
+  if (p.depth > SURFACED_DEPTH) return { ok: false, why: 'SUBMERGED' };
+  if (g.cond.sea === 'storm') return { ok: false, why: 'SEA TOO HEAVY' };
+  if (p.gunAmmo <= 0) return { ok: false, why: 'NO AMMUNITION' };
+  if (p.surfacedT < GUN.manTime) return { ok: false, why: `MANNING ${Math.ceil((GUN.manTime - p.surfacedT) / TIME_SCALE)} S` };
+  if (p.gunT > 0) return { ok: false, why: 'LOADING', loading: true };
+  return { ok: true, why: 'READY' };
+}
+
+// Chance that one round hits ship s at range d.
+function gunHitChance(g, s, d) {
+  const p = g.player;
+  let k = clamp(0.8 - (d - 500) / 3500 * 0.65, 0.12, 0.8);
+  k *= clamp(s.length / 100, 0.6, 1.2);
+  k *= 1 - clamp(s.speed / 40, 0, 0.5);
+  k *= g.cond.sea === 'calm' ? 1 : 0.8;
+  k *= g.cond.time === 'night' ? 0.6 : g.cond.time === 'dusk' ? 0.8 : 1;
+  k *= g.cond.fog ? 0.7 : 1;
+  k *= 1 - clamp(Math.abs(p.speed) / 30, 0, 0.4);          // a steady platform shoots better
+  const walk = p.gunWalk && p.gunWalk.id === s.id ? p.gunWalk.n : 0;
+  return clamp(k + Math.min(walk, 5) * 0.05, 0.05, 0.9);   // the gun layer walks his fire onto the target
+}
+
+function fireGun(g) {
+  const p = g.player;
+  const st = gunState(g);
+  if (!st.ok) { say(g, st.loading ? 'GUN LOADING' : `DECK GUN: ${st.why}`, 'yellow'); return false; }
+  const s = p.lock && g.ships.find(x => x.id === p.lock.id);
+  if (!s || s.sinking) { say(g, 'DECK GUN: LOCK A TARGET FIRST (T)', 'yellow'); return false; }
+  const d = dist2d(p.x, p.y, s.x, s.y);
+  if (d > GUN.range) { say(g, `DECK GUN: OUT OF RANGE (${(d / 1000).toFixed(1)} KM, MAX ${GUN.range / 1000})`, 'yellow'); return false; }
+  if (s.role === 'sub' && s.depth > SURFACED_DEPTH + 1) { say(g, 'DECK GUN: TARGET SUBMERGED', 'yellow'); return false; }
+  const rel = angleDiff(bearingTo(p.x, p.y, s.x, s.y), p.heading);
+  if (Math.abs(rel) > 155) { say(g, 'DECK GUN: CONNING TOWER IN THE WAY · TURN THE BOAT', 'yellow'); return false; }
+  const hit = g.rng() < gunHitChance(g, s, d);
+  p.gunWalk = p.gunWalk && p.gunWalk.id === s.id ? { id: s.id, n: p.gunWalk.n + 1 } : { id: s.id, n: 1 };
+  p.gunAmmo--;
+  p.gunT = GUN.reload;
+  p.noiseSpike += 0.5;
+  g.stats.shells++;
+  // Where the round lands: on the ship, or a splash short, over or wide.
+  const a = g.rng() * TAU, miss = g.rng.range(25, 90);
+  g.ownShells.push({ targetId: s.id, hit, t: d / GUN.shellSpeed, dx: hit ? 0 : Math.sin(a) * miss, dy: hit ? 0 : Math.cos(a) * miss });
+  emit(g, 'deckGun');
+  // The bang is heard for miles: every escort comes to look, the convoy scatters.
+  for (const e of g.ships) {
+    if (!e.ai || e.sinking || e.role === 'sub') continue;
+    if (dist2d(p.x, p.y, e.x, e.y) > 9000) continue;
+    setLastKnown(g, e, 150);
+    if (e.ai.state === 'escort') e.ai.state = 'hunt';
+  }
+  alertConvoy(g);
+  return true;
+}
+
+function stepOwnShells(g, dt) {
+  const p = g.player;
+  if (p.gunT > 0) p.gunT = Math.max(0, p.gunT - dt);
+  p.surfacedT = p.depth <= SURFACED_DEPTH ? p.surfacedT + dt : 0;
+  for (const sh of g.ownShells) {
+    sh.t -= dt;
+    if (sh.t > 0) continue;
+    sh.done = true;
+    const s = g.ships.find(x => x.id === sh.targetId);
+    if (!s) continue;
+    const d = dist2d(p.x, p.y, s.x, s.y);
+    if (sh.hit && !s.sinking) {
+      g.stats.shellHits++;
+      const perHit = s.maxHp / clamp(s.grt / 650, 5, 16);
+      s.hp -= perHit;
+      s.burning = true;
+      g.effects.push({ type: 'flash', x: s.x + g.rng.range(-0.3, 0.3) * s.length * Math.sin(s.heading * DEG), y: s.y + g.rng.range(-0.3, 0.3) * s.length * Math.cos(s.heading * DEG), h: 6, t: 0, dur: 0.4 });
+      emit(g, 'shellOnTarget', { dist: d });
+      if (s.hp <= 0.001) sinkShip(g, s);
+    } else {
+      spawnGeyser(g, s.x + sh.dx, s.y + sh.dy, 14, 1.6);
+      emit(g, 'splash', { dist: d });
+    }
+  }
+  g.ownShells = g.ownShells.filter(sh => !sh.done);
+}
+
+// The plot remembers what the boat has seen and heard, so the chart never shows more than that.
+function plotInit() {
+  return { track: [], trackT: 0, contacts: {}, mines: {}, blasts: [], intel: null, next: 1, lookT: 0 };
+}
+
+function plotContact(g, id, x, y, type, exact, name) {
+  const pl = g.plot;
+  let c = pl.contacts[id];
+  if (!c) c = pl.contacts[id] = { id, n: pl.next++, type, pts: [], name: null };
+  c.type = type;
+  if (name) c.name = name;
+  const last = c.pts[c.pts.length - 1];
+  // Average reports that come close together, so that a passive blip's wander does not look like speed.
+  if (last && g.time - last.t0 < 8) {
+    const w = exact ? 0.7 : 0.35;
+    last.x = lerp(last.x, x, w); last.y = lerp(last.y, y, w); last.t = g.time;
+  } else c.pts.push({ x, y, t: g.time, t0: g.time });
+  while (c.pts.length && g.time - c.pts[0].t > 240) c.pts.shift();
+  c.lastT = g.time;
+}
+
+// Estimated course and speed of a contact from its plotted positions (least squares).
+function plotEstimate(c) {
+  const pts = c.pts;
+  if (pts.length < 3 || pts[pts.length - 1].t - pts[0].t < 40) return null;
+  const n = pts.length;
+  let st = 0, sx = 0, sy = 0;
+  for (const q of pts) { st += q.t; sx += q.x; sy += q.y; }
+  st /= n; sx /= n; sy /= n;
+  let tt = 0, tx = 0, ty = 0;
+  for (const q of pts) { tt += (q.t - st) ** 2; tx += (q.t - st) * (q.x - sx); ty += (q.t - st) * (q.y - sy); }
+  if (tt < 1e-6) return null;
+  const vx = tx / tt, vy = ty / tt, v = Math.hypot(vx, vy);
+  const tl = pts[n - 1].t;
+  return { x: sx + vx * (tl - st), y: sy + vy * (tl - st), vx, vy, speed: v / KN, course: wrap360(Math.atan2(vx, vy) / DEG) };
+}
+
+// Noise for the plot that does not touch the game's random sequence (so replays stay identical).
+const plotNoise = (k, t) => { const v = Math.sin(k * 127.1 + t * 311.7) * 43758.5453; return (v - Math.floor(v) - 0.5) * 2; };
+
+function updatePlot(g, dt) {
+  const pl = g.plot, p = g.player;
+  pl.trackT -= dt;
+  if (pl.trackT <= 0 && p.alive) {
+    pl.trackT = 15;
+    pl.track.push({ x: p.x, y: p.y, d: p.depth });
+    if (pl.track.length > 600) pl.track.shift();
+  }
+  // Lookouts and the periscope report what they can see.
+  pl.lookT -= dt;
+  if (pl.lookT <= 0) {
+    pl.lookT = 4;
+    const eyes = p.alive && (p.depth <= SURFACED_DEPTH || scopeAvailable(g));
+    if (eyes) {
+      const vr = visualRange(g) * (p.depth <= SURFACED_DEPTH ? 1 : 0.85);
+      for (const s of g.ships) {
+        if (s.sinking) continue;
+        if (s.role === 'sub' && s.depth > PERISCOPE_MAX - 2) continue;
+        const d = dist2d(p.x, p.y, s.x, s.y);
+        if (d > vr) continue;
+        const e = d * 0.03;                                     // eyeball range error
+        plotContact(g, s.id, s.x + plotNoise(s.id, g.time) * e, s.y + plotNoise(s.id + 0.5, g.time) * e, s.role === 'sub' ? 'sub' : 'surface', true, SHIP_CLASSES[s.kind].cls);
+      }
+    }
+  }
+  for (const id in pl.contacts) if (g.time - pl.contacts[id].lastT > 600) delete pl.contacts[id];
+  pl.blasts = pl.blasts.filter(b => g.time - b.t < 240);
 }
 
 /* =========================================================
@@ -2303,6 +2500,7 @@ function setAiMode(g, mode) {
   else {
     ai.plan = null;
     g.player.helmOrder = null;
+    g.player.scopeTarget = null;
     say(g, 'YOU HAVE THE CONN', 'blue');
   }
 }
@@ -2374,7 +2572,7 @@ function aiPlanCore(g) {
   ai.threats = th;
   const plan = {
     phase: 'patrol', note: '', heading: null, telegraph: 3, depth: PERISCOPE_DEPTH, silent: false,
-    scopeUp: true, scope: null, zoom: 0, crash: false, lock: false, tube: null, fire: false, target: null, wait: '',
+    scopeUp: true, scope: null, zoom: 0, crash: false, lock: false, tube: null, fire: false, gun: false, target: null, wait: '', aim: null,
   };
   if (!p.alive) return plan;
   if ((th.hunting && th.hd < AI.evadeRange) || th.charge) ai.lastThreatT = g.time;
@@ -2453,6 +2651,27 @@ function aiPlanCore(g) {
   const ra = g.area ? dist2d(p.x, p.y, g.area.x, g.area.y) : 1e9;
   const inMines = g.mines.length && ra > MINE.rings[0] - 450 && ra < MINE.rings[1] + 500;
 
+  // Deck gun: finish off a damaged merchant, or carry on when the torpedoes are gone, with no escort in sight.
+  const torps = p.reserve + p.tubes.filter(t => t.state !== 'empty').length;
+  const gunCase = tgt.role === 'merchant' && g.cond.sea !== 'storm' && p.gunAmmo > 0 && th.ed > 7000 && !g.detected && !inMines
+    && (tgt.hp < tgt.maxHp || torps === 0) && d < 7000;
+  if (gunCase) {
+    const rel = angleDiff(brg, p.heading);
+    Object.assign(plan, { phase: 'gun', depth: 0, telegraph: d > 2500 ? TELEGRAPH_FULL : 3, scope: brg,
+      heading: d > 2500 || Math.abs(rel) > 140 ? brg : null });
+    const gs = gunState(g);
+    if (!p.lock || p.lock.id !== tgt.id) {
+      plan.lock = scopeAvailable(g) && Math.abs(angleDiff(viewHeading(g), brg)) < 1.5 && d < visualRange(g);
+      plan.note = `SURFACING TO FINISH ${tgt.name.toUpperCase()} WITH THE DECK GUN`;
+    } else if (d > GUN.range) plan.note = `CLOSING TO GUN RANGE · ${fmtKm(d)}`;
+    else if (!gs.ok) plan.note = `DECK GUN: ${gs.why}`;
+    else {
+      plan.gun = Math.abs(rel) <= 150;
+      plan.note = `DECK GUN FIRING · ${fmtKm(d)} · ${p.gunAmmo} ROUNDS LEFT`;
+    }
+    return plan;
+  }
+
   if (!ai.attacking) {
     plan.phase = 'approach';
     if (tgt.speed > 1) {
@@ -2465,6 +2684,7 @@ function aiPlanCore(g) {
       const own = (p.depth < SURFACED_DEPTH ? SUB.maxSurface : SUB.maxSubmerged) * 0.8 * KN;
       const sol = interceptCourse(p.x, p.y, axp, ayp, Math.sin(c) * v, Math.cos(c) * v, own);
       plan.heading = sol ? sol.course : bearingTo(p.x, p.y, axp, ayp);
+      plan.aim = { x: axp, y: ayp };
     } else plan.heading = brg;
     const surfaceRun = th.ed > clear && !g.detected && d > 6000 && tgt.role !== 'sub' && !(g.mines.length && ra0 < MINE.rings[1] + 1500);
     if (surfaceRun || ai.recharging) {
@@ -2566,6 +2786,7 @@ function aiApply(g, plan) {
   if (p.zoom !== plan.zoom) command(g, plan.zoom ? 'zoomIn' : 'zoomOut');
   if (plan.tube !== null && p.selectedTube !== plan.tube) command(g, 'tube', plan.tube);
   if (plan.lock && g.realTime - ai.lastLockT > 1) { ai.lastLockT = g.realTime; command(g, 'lock'); }
+  if (plan.gun && g.realTime - (ai.lastGunT || -9) > 0.4) { ai.lastGunT = g.realTime; command(g, 'gun'); }
   if (plan.fire && g.realTime - ai.lastShotT > 2.5) {
     if (fireTorpedo(g)) ai.lastShotT = g.realTime;
   }
@@ -2621,6 +2842,10 @@ function guideStep(g, plan) {
   if (plan.lock) {
     const id = plan.target;
     return { id: 'lock', why, text: 'LOCK THE TARGET IN THE CROSSHAIR', keys: 'PRESS T', check: () => p.lock && p.lock.id === id };
+  }
+  if (plan.gun) {
+    const n = g.stats.shells;
+    return { id: 'gun', why, text: 'FIRE THE DECK GUN', keys: 'PRESS E (HOLD FIRE WHEN AN ESCORT SHOWS)', check: () => g.stats.shells > n };
   }
   if (plan.fire) {
     const n = g.stats.fired;
@@ -2735,7 +2960,7 @@ function resize() {
 
 /* ---------- drawing helpers ---------- */
 function font(size, bold) {
-  return `${bold ? 'bold ' : ''}${Math.round(size)}px "Courier New", monospace`;
+  return `${bold ? 'bold ' : ''}${Math.max(1, size).toFixed(1)}px "Courier New", monospace`;
 }
 
 function text(c, str, x, y, color, size, align, baseline) {
@@ -3491,6 +3716,15 @@ function drawReticle(c, g, r, cam) {
 
 function drawPeriscope(c, g, r) {
   const p = g.player;
+  if (chartOn) {
+    drawChart(c, g, r);
+    c.save();
+    c.beginPath(); c.rect(r.x, r.y, r.w, r.h); c.clip();
+    drawMessages(c, g, r);
+    drawAiCaption(c, g, r);
+    c.restore();
+    return;
+  }
   const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
   const R = Math.max(r.w, r.h) / 2;
   const cam = periscopeCamera(g, r);
@@ -3553,6 +3787,175 @@ function drawMessages(c, g, r) {
   if (g.patrolState === 'ending' && g.state === 'playing') {
     text(c, `PATROL ${g.patrol} COMPLETE · NEXT CONVOY SOON`, cx, r.y + r.h * 0.3, rgba('yellow', 0.6 + 0.4 * Math.sin(g.realTime * 4)), FS * 1.4, 'center');
   }
+}
+
+/* ---------- navigation chart (L) ---------- */
+const CHART_SCALES = [2000, 4000, 8000, 16000];        // half the chart's height, in m
+let chartOn = false;
+let chartScale = 2;
+
+function drawChart(c, g, r) {
+  const p = g.player, pl = g.plot;
+  const half = CHART_SCALES[chartScale];
+  const k = (r.h / 2) / half;
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+  const X = x => cx + (x - p.x) * k, Y = y => cy - (y - p.y) * k;
+  const now = g.time;
+  c.save();
+  c.beginPath(); c.rect(r.x, r.y, r.w, r.h); c.clip();
+  c.fillStyle = '#00060f';
+  c.fillRect(r.x, r.y, r.w, r.h);
+
+  // grid, labelled in km from the patrol's starting point
+  const step = half <= 4000 ? 1000 : half <= 8000 ? 2000 : 4000;
+  const x0 = p.x - r.w / 2 / k, x1 = p.x + r.w / 2 / k, y0 = p.y - half, y1 = p.y + half;
+  c.beginPath();
+  for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) line(c, X(x), r.y, X(x), r.y + r.h);
+  for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) line(c, r.x, Y(y), r.x + r.w, Y(y));
+  stroke(c, C.blue, LW * 0.7, 0.18);
+  for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) text(c, `${Math.round(x / 1000)}`, X(x) + 3, r.y + r.h - FS * 0.7, rgba('blue', 0.55), FS * 0.6);
+  for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) text(c, `${Math.round(y / 1000)}`, r.x + 4, Y(y) - FS * 0.45, rgba('blue', 0.55), FS * 0.6);
+
+  // range rings round the boat
+  const ring = (rad, col, a, label) => {
+    c.beginPath(); c.arc(cx, cy, rad * k, 0, TAU);
+    c.setLineDash([4, 6]); stroke(c, C[col], LW, a); c.setLineDash([]);
+    text(c, label, cx + rad * k * 0.71 + 4, cy - rad * k * 0.71, rgba(col, a + 0.2), FS * 0.6);
+  };
+  ring(SONAR_RANGE, INK, 0.3, 'SONAR 6 KM');
+  if (p.depth <= SURFACED_DEPTH) ring(GUN.range, 'yellow', 0.35, 'GUN 4 KM');
+
+  // intelligence from U-boat command
+  const it = pl.intel;
+  if (it) {
+    c.beginPath(); c.arc(X(it.x), Y(it.y), Math.max(6, it.r * k), 0, TAU);
+    c.setLineDash([10, 6]); stroke(c, C.yellow, LW * 1.2, 0.6); c.setLineDash([]);
+    text(c, it.label, X(it.x), Y(it.y) - Math.max(6, it.r * k) - FS * 0.6, rgba('yellow', 0.8), FS * 0.65, 'center');
+    if (it.course !== undefined) {
+      const a = it.course * DEG, L = 2500;
+      c.beginPath();
+      line(c, X(it.x), Y(it.y), X(it.x + Math.sin(a) * L), Y(it.y + Math.cos(a) * L));
+      stroke(c, C.yellow, LW, 0.5);
+    }
+    if (it.mines) {
+      c.beginPath();
+      for (const R of it.mines) { c.moveTo(X(it.x) + R * k, Y(it.y)); c.arc(X(it.x), Y(it.y), R * k, 0, TAU); }
+      c.setLineDash([2, 5]); stroke(c, C.orange, LW * 1.4, 0.55); c.setLineDash([]);
+      text(c, 'MINEFIELD REPORTED', X(it.x), Y(it.y) + it.mines[1] * k + FS * 0.8, rgba('orange', 0.8), FS * 0.65, 'center');
+    }
+  }
+  // mines found by pinging
+  c.beginPath();
+  for (const id in pl.mines) {
+    const m = pl.mines[id], s = Math.max(2, FS * 0.2);
+    line(c, X(m.x) - s, Y(m.y) - s, X(m.x) + s, Y(m.y) + s); line(c, X(m.x) - s, Y(m.y) + s, X(m.x) + s, Y(m.y) - s);
+  }
+  stroke(c, C.orange, LW, 0.8);
+  // depth-charge explosions
+  for (const b of pl.blasts) {
+    const a = clamp(1 - (now - b.t) / 240, 0, 1), s = FS * 0.35;
+    c.beginPath();
+    for (let i = 0; i < 4; i++) { const an = i * Math.PI / 4; line(c, X(b.x) - Math.cos(an) * s, Y(b.y) - Math.sin(an) * s, X(b.x) + Math.cos(an) * s, Y(b.y) + Math.sin(an) * s); }
+    stroke(c, C.yellow, LW, a);
+  }
+  // own track
+  c.beginPath();
+  pl.track.forEach((q, i) => { if (i === 0) c.moveTo(X(q.x), Y(q.y)); else c.lineTo(X(q.x), Y(q.y)); });
+  c.lineTo(cx, cy);
+  c.setLineDash([2, 4]); stroke(c, C[INK], LW, 0.55); c.setLineDash([]);
+  // own torpedoes (we know where we sent them)
+  for (const t of g.torpedoes) {
+    if (t.owner !== 'player') continue;
+    c.beginPath();
+    t.trail.forEach((q, i) => { if (i === 0) c.moveTo(X(q.x), Y(q.y)); else c.lineTo(X(q.x), Y(q.y)); });
+    c.lineTo(X(t.x), Y(t.y));
+    stroke(c, C.white, LW, 0.7);
+    c.beginPath(); c.arc(X(t.x), Y(t.y), Math.max(2, LW * 1.5), 0, TAU); c.fillStyle = C.white; c.fill();
+  }
+
+  // contacts: last fix, estimated course and speed
+  const lockId = p.lock ? p.lock.id : null;
+  for (const id in pl.contacts) {
+    const ct = pl.contacts[id];
+    const last = ct.pts[ct.pts.length - 1];
+    if (!last) continue;
+    const age = now - ct.lastT, a = clamp(1 - age / 600, 0.25, 1);
+    const est = ct.sunk ? null : plotEstimate(ct);
+    const px = X(last.x), py = Y(last.y);
+    const escort = ct.name && /corvette|destroyer/i.test(ct.name);
+    const col = ct.type === 'torpedo' ? 'red' : ct.type === 'sub' ? 'blue' : escort ? 'red' : INK;
+    const s = FS * 0.45;
+    c.beginPath();
+    if (ct.sunk) { line(c, px - s, py - s, px + s, py + s); line(c, px - s, py + s, px + s, py - s); }
+    else if (ct.type === 'sub') { c.moveTo(px + s, py); c.arc(px, py, s, 0, Math.PI, true); c.closePath(); }
+    else if (ct.type === 'torpedo') { c.arc(px, py, s * 0.4, 0, TAU); }
+    else { c.moveTo(px, py - s); c.lineTo(px + s, py); c.lineTo(px, py + s); c.lineTo(px - s, py); c.closePath(); }
+    stroke(c, C[col], LW * 1.3, a);
+    if (est) {
+      // where it will be in three minutes, with an arrowhead
+      const ex = X(last.x + est.vx * 180), ey = Y(last.y + est.vy * 180);
+      c.beginPath();
+      line(c, px, py, ex, ey);
+      const an = Math.atan2(ey - py, ex - px), h = FS * 0.4;
+      line(c, ex, ey, ex - Math.cos(an - 0.4) * h, ey - Math.sin(an - 0.4) * h);
+      line(c, ex, ey, ex - Math.cos(an + 0.4) * h, ey - Math.sin(an + 0.4) * h);
+      stroke(c, C[col], LW, a * 0.8);
+    }
+    const name = ct.sunk ? 'SUNK' : (ct.name ? ct.name.toUpperCase().replace('-CLASS', '') : ct.type === 'torpedo' ? 'TORPEDO' : `CONTACT ${ct.n}`);
+    const info = est && ct.type !== 'torpedo' ? ` · ${pad3(est.course)}° ${est.speed.toFixed(0)} KN` : '';
+    text(c, name + info, px + s * 1.6, py - s * 1.2, rgba(col, a * 0.9), FS * 0.6);
+    if (Number(id) === lockId) { c.beginPath(); c.arc(px, py, s * 2, 0, TAU); stroke(c, C.yellow, LW * 1.2, 1); }
+  }
+
+  // the TDC's firing solution: gyro course to the intercept point
+  const sol = firingSolution(g);
+  if (sol) {
+    const vt = TORPEDO.speedKn * KN, dist = vt * sol.time;
+    const ix = p.x + Math.sin(sol.course * DEG) * dist, iy = p.y + Math.cos(sol.course * DEG) * dist;
+    c.beginPath(); line(c, cx, cy, X(ix), Y(iy));
+    c.setLineDash([6, 4]); stroke(c, C.yellow, LW * 1.2, 0.8); c.setLineDash([]);
+    c.beginPath(); c.arc(X(ix), Y(iy), FS * 0.4, 0, TAU);
+    line(c, X(ix) - FS * 0.6, Y(iy), X(ix) + FS * 0.6, Y(iy)); line(c, X(ix), Y(iy) - FS * 0.6, X(ix), Y(iy) + FS * 0.6);
+    stroke(c, C.yellow, LW * 1.2, 0.9);
+    text(c, `INTERCEPT · GYRO ${pad3(sol.course)}° · ${Math.round(sol.time / TIME_SCALE)} S`, X(ix) + FS * 0.8, Y(iy) + FS * 0.9, C.yellow, FS * 0.6);
+  }
+  // the AI's intended course and aim point
+  const plan = g.ai.mode !== 'off' && g.ai.plan;
+  if (plan && plan.heading !== null) {
+    const a = plan.heading * DEG, L = half * 0.6;
+    c.beginPath(); line(c, cx, cy, X(p.x + Math.sin(a) * L), Y(p.y + Math.cos(a) * L));
+    c.setLineDash([10, 6]); stroke(c, C.blue, LW * 1.4, 0.8); c.setLineDash([]);
+  }
+  if (plan && plan.aim) {
+    c.beginPath(); c.arc(X(plan.aim.x), Y(plan.aim.y), FS * 0.6, 0, TAU);
+    stroke(c, C.blue, LW * 1.4, 0.9);
+    text(c, 'AIM POINT', X(plan.aim.x) + FS * 0.9, Y(plan.aim.y), C.blue, FS * 0.6);
+  }
+  // the boat: heading triangle and the periscope bearing
+  const hh = p.heading * DEG, s = FS * 0.7;
+  const pt = (ang, rad) => [cx + Math.sin(ang) * rad, cy - Math.cos(ang) * rad];
+  c.beginPath();
+  const t0 = pt(hh, s * 1.4), t1 = pt(hh + 2.5, s), t2 = pt(hh - 2.5, s);
+  c.moveTo(...t0); c.lineTo(...t1); c.lineTo(...t2); c.closePath();
+  c.fillStyle = rgba('white', 0.9); c.fill();
+  const vh = viewHeading(g) * DEG;
+  c.beginPath(); line(c, cx, cy, ...pt(vh, s * 5));
+  c.setLineDash([2, 4]); stroke(c, C.yellow, LW, 0.7); c.setLineDash([]);
+
+  // header, scale bar, legend
+  text(c, `CHART · NORTH UP · ${(half * 2 / 1000).toFixed(0)} KM TOP TO BOTTOM · GRID ${step / 1000} KM · ↑/↓ SCALE · L PERISCOPE`, r.x + FS * 0.8, r.y + FS * 1.1, rgba(INK, 0.85), FS * 0.7);
+  text(c, `DEPTH ${Math.round(p.depth)} M · ${pad3(p.heading)}° · ${p.speed.toFixed(1)} KN`, r.x + FS * 0.8, r.y + FS * 2.3, C.white, FS * 0.7);
+  const legend = [['◇ SHIP', INK], ['◇ ESCORT', 'red'], ['◡ SUBMARINE', 'blue'], ['× MINE', 'orange'], ['✱ DEPTH CHARGE', 'yellow'], ['— TORPEDO', 'white'], ['- - AI COURSE', 'blue']];
+  let ly = r.y + r.h - FS * 1.2 * legend.length - FS * 0.8;
+  for (const [l, col] of legend) { text(c, l, r.x + r.w - FS * 0.8, ly, rgba(col, 0.75), FS * 0.6, 'right'); ly += FS * 1.2; }
+  const bar = step * k;
+  c.beginPath(); line(c, r.x + FS, r.y + r.h - FS * 2.2, r.x + FS + bar, r.y + r.h - FS * 2.2);
+  line(c, r.x + FS, r.y + r.h - FS * 2.5, r.x + FS, r.y + r.h - FS * 1.9); line(c, r.x + FS + bar, r.y + r.h - FS * 2.5, r.x + FS + bar, r.y + r.h - FS * 1.9);
+  stroke(c, C[INK], LW, 0.8);
+  text(c, `${step / 1000} KM`, r.x + FS + bar / 2, r.y + r.h - FS * 2.9, rgba(INK, 0.8), FS * 0.6, 'center');
+  c.restore();
+  c.beginPath(); c.rect(r.x, r.y, r.w, r.h);
+  stroke(c, C[INK], LW * 2, 0.9);
 }
 
 /* ---------- instruments ---------- */
@@ -3947,6 +4350,13 @@ function drawRight(c, g, r) {
   text(c, arcOk ? 'IN ARC' : 'OUT OF ARC', r.x + r.w / 2 + pad, y, arcOk ? C[INK] : C.red, FS * 0.8);
   text(c, depthOk ? 'DEPTH OK' : 'TOO DEEP', r.x + r.w - pad, y, depthOk ? C[INK] : C.red, FS * 0.8, 'right');
   y += lh;
+  {
+    const gs = gunState(g);
+    text(c, 'DECK GUN 88', r.x + pad, y, C[INK], FS * 0.8);
+    text(c, gs.why, r.x + r.w / 2 + pad, y, gs.ok ? C[INK] : gs.loading ? C.yellow : rgba(INK, 0.5), FS * 0.8);
+    text(c, `${p.gunAmmo} RDS`, r.x + r.w - pad, y, p.gunAmmo > 20 ? C[INK] : C.yellow, FS * 0.8, 'right');
+    y += lh;
+  }
 
   // status lamps
   c.beginPath(); line(c, r.x + pad, y, r.x + r.w - pad, y); stroke(c, C[INK], LW, 0.3);
@@ -4027,15 +4437,22 @@ function drawRight(c, g, r) {
   text(c, `${fmtInt(score(g))}`, r.x + r.w - pad, sy, C.yellow, FS, 'right');
 }
 
-const COMMAND_LINE = 'W/S ENGINE · A/D RUDDER · R/F DEPTH · C CRASH · P SCOPE · ←/→ TRAIN · ↑/↓ POWER · B SCOPE TO BOW · V STEER TO SCOPE · T LOCK · SPACE FIRE · 1-5 TUBE · TAB PING · X SILENT · K AI CAPTAIN · O GUIDE · H HELP · I STATS · N BLUEPRINTS · ESC PAUSE';
-const DEMO_LINE = 'THE AI CAPTAIN HAS THE CONN · K: TAKE COMMAND · O: SWITCH TO GUIDANCE · H HELP · I STATS · N BLUEPRINTS · ESC PAUSE';
+const COMMAND_LINE = 'W/S ENGINE · A/D RUDDER · R/F DEPTH · C CRASH · P SCOPE · ←/→ TRAIN · ↑/↓ POWER · B BOW · V STEER TO SCOPE · T LOCK · SPACE FIRE · 1-5 TUBE · E DECK GUN · TAB PING · X SILENT · L CHART · K AI CAPTAIN · O GUIDE · H HELP · I STATS · N BLUEPRINTS · ESC PAUSE';
+const DEMO_LINE = 'THE AI CAPTAIN HAS THE CONN · K: TAKE COMMAND · O: SWITCH TO GUIDANCE · L CHART · H HELP · I STATS · N BLUEPRINTS · ESC PAUSE';
 function drawCommandLine(c, r) {
   const str = game && game.ai.mode === 'demo' ? DEMO_LINE : COMMAND_LINE;
-  let size = FS * 0.85;
-  c.font = font(size, true);
-  const w = c.measureText(str).width;
-  if (w > r.w) size *= r.w / w;
-  text(c, str, r.x + r.w / 2, r.y + r.h / 2, game && game.ai.mode === 'demo' ? C.blue : rgba(INK, 0.75), size, 'center');
+  const col = game && game.ai.mode === 'demo' ? C.blue : rgba(INK, 0.75);
+  const fit = (t, max) => { c.font = font(max, true); const w = c.measureText(t).width; return w > r.w ? max * r.w / w : max; };
+  const one = fit(str, FS * 0.85);
+  if (one >= FS * 0.72) { text(c, str, r.x + r.w / 2, r.y + r.h / 2, col, one, 'center'); return; }
+  // too long for one readable line: split it in two at the separator nearest the middle
+  const parts = str.split(' · ');
+  let best = 1, bestD = 1e9, acc = 0;
+  for (let i = 0; i < parts.length - 1; i++) { acc += parts[i].length + 3; const d = Math.abs(acc - str.length / 2); if (d < bestD) { bestD = d; best = i + 1; } }
+  const l1 = parts.slice(0, best).join(' · '), l2 = parts.slice(best).join(' · ');
+  const size = Math.min(fit(l1, FS * 0.8), fit(l2, FS * 0.8), r.h * 0.45);
+  text(c, l1, r.x + r.w / 2, r.y + r.h * 0.27, col, size, 'center');
+  text(c, l2, r.x + r.w / 2, r.y + r.h * 0.75, col, size, 'center');
 }
 
 // Caption of the AI captain (demo) or of the first officer (guide), under the compass tape.
@@ -4097,6 +4514,8 @@ const HELP_KEYS = [
   ['V', 'Steer to the periscope bearing (auto helm)'],
   ['T', 'Lock / release the target'],
   ['SPACE', 'Fire the selected tube'],
+  ['E', 'Deck gun at the locked target (surfaced)'],
+  ['L', 'Chart on / off (↑/↓ change its scale)'],
   ['1 - 5', 'Select tube (1-4 bow, 5 stern)'],
   ['TAB', 'Active sonar ping'],
   ['X', 'Silent running'],
@@ -4122,6 +4541,8 @@ const HELP_TIPS = [
   'Aircraft spot a surfaced boat from far away and a periscope from close. When the lookouts shout AIRCRAFT, crash dive (C): their charges are set shallow and cannot reach 60 m.',
   'Mines are moored 4-35 m deep: pass deeper, or find the swept channel with a ping. Night and fog hide you, but also hide them.',
   'V turns the boat onto the periscope bearing and holds that course (AUTO HELM); A or D takes the wheel back. B brings the periscope back to the bow.',
+  'Deck gun (E): surfaced only, not in a storm; the crew needs about 8 s to clear it away. It fires at the locked target up to 4 km and improves as it walks its fire on. The bang brings every escort within 9 km.',
+  'The chart (L) shows your track, what the lookouts and sonar have reported with estimated course and speed, the orders\' intelligence, the firing solution and the AI\'s course.',
   'K hands the boat to the AI captain: watch him work and read his reasoning at the top of the periscope. O keeps you in command, with the first officer telling you the next step and the keys for it.',
   'The full manual (MANUAL.md) explains every instrument and rule.',
 ];
@@ -4545,7 +4966,7 @@ function handleEvents(g) {
         break;
       case 'charge': {
         const v = clamp(1 - e.dist / 1500, 0.05, 1);
-        Sound.charge(v);
+        Sound.charge(v, e.dist < 800);
         addShake(clamp(600 / Math.max(e.dist, 20), 0, 30), 1.4, 9);
         if (e.dist < 200) addShake(clamp(300 / Math.max(e.dist, 10), 0, 18), 0.4, 40);
         if (e.damage > 0.5) flash('255,59,48', clamp(e.damage / 40, 0.15, 0.6));
@@ -4557,6 +4978,12 @@ function handleEvents(g) {
         addShake(16, 0.6, 40);
         flash('255,59,48', 0.4);
         break;
+      case 'deckGun':
+        Sound.deckGun();
+        addShake(6, 0.35, 40);
+        flash('255,240,200', 0.07);
+        break;
+      case 'shellOnTarget': Sound.boom(clamp(0.45 * (1 - e.dist / 5000), 0.08, 0.45), false); break;
       case 'splash': Sound.splash(clamp(1 - e.dist / 600, 0.1, 0.8)); if (e.dist < 60) addShake(4, 0.3, 30); break;
       case 'gun': Sound.gun(clamp(1 - e.dist / 7000, 0.1, 0.6)); break;
       case 'dud': Sound.clunk(clamp(1 - e.dist / 6000, 0.15, 0.8)); break;
@@ -4650,7 +5077,23 @@ const Sound = {
     const wiF = ac.createBiquadFilter(); wiF.type = 'bandpass'; wiF.frequency.value = 700; wiF.Q.value = 0.6;
     const wiG = ac.createGain(); wiG.gain.value = 0;
     wind.connect(wiF).connect(wiG).connect(this.master);
-    this.amb = { engF, engG, chG, lfo, dG, drone, wG, whine, wiG, wiF };
+    // an escort's propellers passing overhead: a beating thrum with a Doppler shift
+    const sc1 = ac.createOscillator(); sc1.type = 'sawtooth'; sc1.frequency.value = 62;
+    const sc2 = ac.createOscillator(); sc2.type = 'square'; sc2.frequency.value = 31;
+    const scN = this.noiseSrc(true);
+    const scBP = ac.createBiquadFilter(); scBP.type = 'bandpass'; scBP.frequency.value = 520; scBP.Q.value = 2;
+    const scLP = ac.createBiquadFilter(); scLP.type = 'lowpass'; scLP.frequency.value = 700;
+    const scAm = ac.createGain(); scAm.gain.value = 0.5;
+    const scLfo = ac.createOscillator(); scLfo.type = 'square'; scLfo.frequency.value = 8;
+    const scLfoG = ac.createGain(); scLfoG.gain.value = 0.5;
+    scLfo.connect(scLfoG).connect(scAm.gain);
+    const scG = ac.createGain(); scG.gain.value = 0;
+    sc1.connect(scLP); sc2.connect(scLP); scN.connect(scBP).connect(scLP);
+    scLP.connect(scAm).connect(scG).connect(this.master);
+    sc1.start(); sc2.start(); scLfo.start();
+    this.amb = { engF, engG, chG, lfo, dG, drone, wG, whine, wiG, wiF, sc1, sc2, scBP, scLfo, scG };
+    this.creakT = 0;
+    this.lastUpd = 0;
   },
   toggle() {
     this.enabled = !this.enabled;
@@ -4697,8 +5140,21 @@ const Sound = {
     o.connect(og).connect(this.master);
     o.start(t); o.stop(t + 2);
   },
-  charge(vol) {
+  // The click of a depth-charge pistol, heard just before a close one goes off.
+  pistol(vol) {
     if (!this.ok()) return;
+    const ac = this.ac, t = ac.currentTime;
+    for (const [dt, f] of [[0, 2600], [0.035, 1900]]) {
+      const o = ac.createOscillator(); o.type = 'square'; o.frequency.value = f;
+      const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 1200;
+      const g = ac.createGain(); this.env(g, t + dt, 0.001, 0.25 * vol, 0.04);
+      o.connect(hp).connect(g).connect(this.master);
+      o.start(t + dt); o.stop(t + dt + 0.08);
+    }
+  },
+  charge(vol, click) {
+    if (!this.ok()) return;
+    if (click) { this.pistol(vol); setTimeout(() => this.charge(vol, false), 180); return; }
     const ac = this.ac, t = ac.currentTime;
     const n = this.noiseSrc(false);
     const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 160 + vol * 300;
@@ -4804,6 +5260,40 @@ const Sound = {
     n.connect(lp).connect(g).connect(this.master);
     n.start(t); n.stop(t + 0.7);
   },
+  // 88 mm: a sharp crack, a heavy thump and an echo across the water.
+  deckGun() {
+    if (!this.ok()) return;
+    const ac = this.ac, t = ac.currentTime;
+    const n = this.noiseSrc(false);
+    const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 700;
+    const g = ac.createGain(); this.env(g, t, 0.002, 0.7, 0.18);
+    n.connect(hp).connect(g).connect(this.master);
+    n.start(t); n.stop(t + 0.4);
+    const n2 = this.noiseSrc(false);
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.setValueAtTime(700, t); lp.frequency.exponentialRampToValueAtTime(90, t + 1.2);
+    const g2 = ac.createGain(); this.env(g2, t, 0.004, 0.8, 1.3);
+    const dl = ac.createDelay(); dl.delayTime.value = 0.42;
+    const fb = ac.createGain(); fb.gain.value = 0.28;
+    n2.connect(lp).connect(g2).connect(this.master);
+    g2.connect(dl); dl.connect(fb).connect(dl); dl.connect(this.master);
+    n2.start(t); n2.stop(t + 2.5);
+    const o = ac.createOscillator(); o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.5);
+    const og = ac.createGain(); this.env(og, t, 0.003, 0.9, 0.55);
+    o.connect(og).connect(this.master);
+    o.start(t); o.stop(t + 0.7);
+  },
+  // A quiet groan of the pressure hull, or a drip: what you hear in silent running.
+  hullNoise(depth) {
+    if (!this.ok()) return;
+    if (Math.random() < 0.35) {
+      const ac = this.ac, t = ac.currentTime;
+      const o = ac.createOscillator(); o.type = 'sine';
+      o.frequency.setValueAtTime(1400 + Math.random() * 600, t); o.frequency.exponentialRampToValueAtTime(700, t + 0.12);
+      const g = ac.createGain(); this.env(g, t, 0.002, 0.05, 0.25);
+      o.connect(g).connect(this.master);
+      o.start(t); o.stop(t + 0.4);
+    } else this.creak(clamp(0.12 + depth / 500, 0.12, 0.45));
+  },
   periscope() {
     if (!this.ok()) return;
     const ac = this.ac, t = ac.currentTime;
@@ -4817,7 +5307,9 @@ const Sound = {
   update(g) {
     if (!this.ac || !this.amb) return;
     const t = this.ac.currentTime;
-    let eng = 0, engF = 120, churn = 0, rate = 5, droneV = 0, whineV = 0, windV = 0;
+    let eng = 0, engF = 120, churn = 0, rate = 5, droneV = 0, whineV = 0, windV = 0, screwV = 0, screwF = 1, screwRate = 8;
+    const dtR = this.lastUpd ? Math.min(0.2, t - this.lastUpd) : 0;
+    this.lastUpd = t;
     if (g && mode === 'play' && !overlay && g.player.alive) {
       const p = g.player;
       for (const pl of g.planes) {
@@ -4843,6 +5335,28 @@ const Sound = {
         churn = 0.22 * (1 - bd / 4500) ** 1.5 * (p.depth > SURFACED_DEPTH ? 1 : 0.4);
         rate = 2 + best.speed * 0.45;
       }
+      // the nearest escort's screws, loud when it runs over the boat, pitch falling as it passes
+      if (p.depth > SURFACED_DEPTH) {
+        let es = null, ed = 1e9;
+        for (const s of g.ships) {
+          if (s.role !== 'escort' || s.sinking) continue;
+          const d = dist2d(p.x, p.y, s.x, s.y);
+          if (d < ed) { ed = d; es = s; }
+        }
+        if (es && ed < 1600) {
+          const vx = Math.sin(es.heading * DEG) * es.speed * KN - Math.sin(p.heading * DEG) * p.speed * KN;
+          const vy = Math.cos(es.heading * DEG) * es.speed * KN - Math.cos(p.heading * DEG) * p.speed * KN;
+          const vr = ((es.x - p.x) * vx + (es.y - p.y) * vy) / Math.max(ed, 1);   // > 0 going away
+          screwF = clamp(1 - vr / 40, 0.7, 1.35);
+          screwV = 0.32 * (1 - ed / 1600) ** 2 * (ed < 300 ? 1.4 : 1);
+          screwRate = 3 + es.speed * 0.55;
+        }
+        // silent running: you hear the hull
+        if (p.silent && p.depth > 40 && dtR > 0) {
+          this.creakT -= dtR;
+          if (this.creakT <= 0) { this.creakT = 2.5 + Math.random() * 6; this.hullNoise(p.depth); }
+        }
+      }
     }
     this.amb.engG.gain.setTargetAtTime(eng, t, 0.3);
     this.amb.engF.frequency.setTargetAtTime(engF, t, 0.3);
@@ -4853,6 +5367,11 @@ const Sound = {
     this.amb.whine.frequency.setTargetAtTime(1800 + whineV * 6000, t, 0.2);
     this.amb.wiG.gain.setTargetAtTime(windV, t, 0.8);
     this.amb.wiF.frequency.setTargetAtTime(500 + Math.sin(t * 0.7) * 250, t, 0.5);
+    this.amb.scG.gain.setTargetAtTime(screwV, t, 0.25);
+    this.amb.sc1.frequency.setTargetAtTime(62 * screwF, t, 0.3);
+    this.amb.sc2.frequency.setTargetAtTime(31 * screwF, t, 0.3);
+    this.amb.scBP.frequency.setTargetAtTime(520 * screwF, t, 0.3);
+    this.amb.scLfo.frequency.setTargetAtTime(screwRate * screwF, t, 0.3);
   },
 };
 
@@ -4949,6 +5468,13 @@ function onKeyDown(e) {
     case 'KeyH': overlay = 'help'; return;
     case 'KeyI': overlay = 'stats'; return;
     case 'KeyN': overlay = 'blueprints'; return;
+    case 'KeyL': chartOn = !chartOn; return;
+  }
+  if (chartOn && (code === 'ArrowUp' || code === 'ArrowDown')) {
+    chartScale = clamp(chartScale + (code === 'ArrowUp' ? -1 : 1), 0, CHART_SCALES.length - 1);
+    return;
+  }
+  switch (code) {
     case 'KeyK': setAiMode(g, g.ai.mode === 'demo' ? 'off' : 'demo'); return;
     case 'KeyO': setAiMode(g, g.ai.mode === 'guide' ? 'off' : 'guide'); return;
   }
@@ -4968,6 +5494,7 @@ function onKeyDown(e) {
     case 'ArrowDown': command(g, 'zoomOut'); break;
     case 'KeyB': command(g, 'scopeToBow'); break;
     case 'KeyV': command(g, 'steerToScope'); break;
+    case 'KeyE': command(g, 'gun'); break;
     case 'KeyT': command(g, 'lock'); break;
     case 'Space': command(g, 'fire'); break;
     case 'Tab': command(g, 'ping'); break;

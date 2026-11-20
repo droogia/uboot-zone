@@ -33,6 +33,20 @@ accelerates, turns and dives slowly.
 
 When the hull drops below 30% the whole panel switches to red emergency lighting.
 
+## Deck gun, chart, sounds
+
+- **Deck gun (E).** Surfaced, not in a storm, after about 8 s for the crew to clear it
+  away: 88 mm rounds at the locked target up to 4 km, better close in and as the gun layer
+  walks his fire on. Good for finishing off a torpedoed straggler; the bang brings every
+  escort within 9 km.
+- **Chart (L).** A north-up plot in place of the periscope: your track, contacts from the
+  lookouts and the sonar with estimated course and speed, the intelligence from your
+  orders (convoy report, minefield), depth-charge explosions, your torpedoes, the TDC's
+  intercept point and the AI's course and aim point. It shows only what the boat knows.
+- **Sounds.** Escort propellers thrumming overhead with a Doppler shift, the click of
+  depth-charge pistols before a close blast, the hull groaning in silent running, the deck
+  gun.
+
 ## Blueprints
 
 **N** opens a recognition manual with a blueprint sheet for your Type VIIC, every enemy
@@ -78,6 +92,8 @@ any time.
 | O | First officer's step-by-step guidance on / off |
 | + / - | Text size, 75% to 125% in 5% steps (the text also scales with the window, up to 4K) |
 | N | Blueprints of every vessel and aircraft (also from the title screen) |
+| E | Deck gun: fire the 88 mm at the locked target (surfaced, crew at the gun) |
+| L | Chart on / off; ↑/↓ change its scale while it is up |
 | ENTER | Accept the orders at the start of a patrol |
 | ESC | Pause (Q in the pause screen abandons the patrol) |
 
@@ -112,8 +128,8 @@ at random, and convoys and escorts grow with every patrol.
 
 ### Rules worth knowing
 
-- The periscope only works at periscope depth (13-16 m) or surfaced. Waves can wash
-  over it.
+- The periscope only works at periscope depth (13-16 m); surfaced, the bridge watch sees
+  anyway. Waves can wash over it.
 - Torpedoes run at 40 knots for 6 km, keep the gyro course, arm after 250 m and are
   not all reliable. They can be fired only shallower than 25 m; bow tubes cover ±90°
   from the bow, the stern tube ±90° from the stern.

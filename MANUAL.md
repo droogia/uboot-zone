@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.3. This manual explains every part of the control room, how the boat
+For game version v1.4. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -28,6 +28,9 @@ version; the in-game help (**H**) has the keys and a few reminders.
 18. [The AI captain and the first officer](#18-the-ai-captain-and-the-first-officer)
 19. [Screen and text size](#19-screen-and-text-size)
 20. [Blueprints](#20-blueprints)
+21. [The deck gun](#21-the-deck-gun)
+22. [The chart](#22-the-chart)
+23. [What you hear](#23-what-you-hear)
 
 A note on time: the game runs **four times faster than real time** so that an attack
 takes minutes, not hours. Speeds are given in real knots and the boat behaves in proportion,
@@ -93,9 +96,9 @@ the green instruments turn red and the screen pulses. Get the boat out of troubl
 The periscope is your eye on the surface. It is drawn in the green vector style of the
 1980 arcade game *Battlezone*: ships, waves, coastline and moon are all line drawings.
 
-**When it works.** The periscope works only when it is raised (**P**) and the boat is at
-**periscope depth (13 m) or shallower**. Surfaced, you look from the bridge, higher above
-the waves. Below 16.5 m the periscope is under water and the view shows the sea around you
+**When it works.** Submerged, the periscope works only when it is raised (**P**) and the
+boat is at **periscope depth (13 m) or shallower**. Surfaced, you look from the bridge,
+higher above the waves, whether the periscope is up or not. Below 16.5 m the periscope is under water and the view shows the sea around you
 instead (see below). Raising takes about a second, lowering a little less.
 
 **Training it.** **←** and **→** turn the periscope; hold **SHIFT** to turn it three times
@@ -722,6 +725,8 @@ browser; they start after the first key press.
 | O | First officer's guidance on / off |
 | + / - | Text size (75% to 125%) |
 | N | Blueprints |
+| E | Deck gun |
+| L | Chart (↑/↓ scale) |
 | ENTER | Accept the orders / start a new game |
 | ESC | Pause (then Q to abandon the patrol) |
 
@@ -794,3 +799,64 @@ Each sheet shows the same wireframe the periscope draws, as:
 
 The grid is 5 m (1 m for the torpedo). The torpedo is drawn twice life size in the periscope;
 its sheet gives the real dimensions.
+
+## 21. The deck gun
+
+![The deck gun at work on a straggler](docs/manual/deck-gun.png)
+
+The Type VIIC carries an 88 mm gun forward of the conning tower. **E** fires one round at
+the **locked target** (lock it first with **T**). The right panel shows the gun's state
+under the tubes: **SUBMERGED**, **MANNING** (with the seconds left), **LOADING**, **READY**,
+and the rounds left.
+
+- Surfaced only, and not in a storm: the crew needs about **8 seconds** after surfacing to
+  clear the gun away.
+- Range **4 km**; a round flies about 750 m a second. One round every 1.25 seconds.
+- The chance of a hit is good close in and poor at long range, lower against a small or
+  fast target, at night, in fog or in a moderate sea, and while your own boat is moving
+  fast. It improves as the gun layer walks his fire onto the same target.
+- A cargo steamer takes 5 to 12 hits, a tanker up to 16, an escort about 5. A ship already
+  hit by a torpedo needs far fewer: the gun is for **finishing off stragglers**.
+- 120 rounds, 60 more at each resupply.
+- **The bang carries.** Every escort within 9 km comes to look, and the convoy scatters.
+  Use the gun only when no escort is in sight, and dive the moment one shows up.
+
+The AI captain uses it the same way: he surfaces to finish a damaged merchant, or when his
+torpedoes are gone, but only with every escort more than 7 km away.
+
+## 22. The chart
+
+![The chart during an attack](docs/manual/chart.png)
+
+**L** replaces the periscope view with the navigation chart (and back). The boat carries on
+as before. The chart is **north up**, centred on the boat, with a km grid (labelled from
+where the patrol began); **↑/↓** change the scale from 4 to 32 km top to bottom.
+
+The chart shows only what the boat knows:
+
+| Mark | Meaning |
+|---|---|
+| White triangle, dotted line | Your boat and its track; dotted yellow: the periscope bearing |
+| Green ◇ | A ship reported by the lookouts or the periscope (named) or heard on sonar (CONTACT n) |
+| Red ◇ | An escort |
+| Blue half-circle | A submarine |
+| Arrow from a contact | Its estimated course and speed: where it will be in 3 minutes. The estimate needs about 40 seconds of reports and gets better with more |
+| × | A sunk ship; orange × a mine found by a ping |
+| Yellow ✱ | A depth-charge explosion (fades in 4 minutes) |
+| Yellow dashed circle | What U-boat command reported in the orders (with the convoy's course); orange dotted rings: a reported minefield |
+| White line | Your torpedoes running |
+| Yellow dashed line and ⊕ | The TDC's firing solution: gyro course and intercept point, with the run time |
+| Blue dashed line, blue circle | The AI captain's (or first officer's) course and aim point |
+| Dashed rings | Sonar range (6 km) and, surfaced, gun range (4 km) |
+
+## 23. What you hear
+
+All the sounds are synthesized. Besides the ones of earlier versions (pings, ASDIC, depth
+charges, torpedoes, aircraft), v1.4 adds:
+
+- **Escort propellers**: a beating thrum that grows as an escort closes on you while you are
+  submerged, loudest when it runs overhead, its pitch falling as it passes (Doppler).
+- **Depth-charge pistols**: a sharp double click just before a close charge goes off.
+- **The hull in silent running**: below 40 m, quiet groans of the pressure hull and the odd
+  drip, more often the deeper you are.
+- **The deck gun**: crack, thump and an echo across the water; a dull boom for each hit.

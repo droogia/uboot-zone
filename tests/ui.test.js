@@ -164,3 +164,54 @@ test('losing the boat shows the report and stores the score', async () => {
   assert.deepEqual(app.errors, []);
   app.close();
 });
+
+test('K on the title starts a demo: the AI captain has the conn and the score is not recorded', async () => {
+  const app = openApp();
+  await app.frames(2);
+  app.press('KeyK');
+  await app.frames(2);
+  const g = app.peek('game');
+  assert.equal(g.ai.mode, 'demo');
+  assert.equal(app.peek('overlay'), 'briefing');
+  app.press('Enter');                                      // ENTER on the orders takes command
+  assert.equal(g.ai.mode, 'off');
+  app.press('KeyK');
+  assert.equal(g.ai.mode, 'demo');
+  const t0 = g.player.telegraph;
+  app.press('KeyW');
+  assert.equal(g.player.telegraph, t0, 'boat keys are ignored while the AI captain commands');
+  await app.frames(6);
+  assert.ok(app.texts.some(t => t.startsWith('AI CAPTAIN')), 'caption drawn');
+  g.player.depth = 300;
+  await app.frames(4);
+  g.lostAt -= 10;
+  await app.frames(3);
+  assert.equal(app.peek('mode'), 'over');
+  assert.equal(app.window.localStorage.getItem('uboot-zone.scores'), null);
+  assert.deepEqual(app.errors, []);
+});
+
+test('O gives the first officer\'s guidance; V, B and +/- work', async () => {
+  const app = openApp();
+  await app.frames(2);
+  app.press('Enter');
+  await app.frames(2);
+  app.press('KeyO');
+  const g = app.peek('game');
+  assert.equal(g.ai.mode, 'guide');
+  assert.equal(app.peek('overlay'), null);
+  await app.frames(10);
+  assert.ok(app.texts.includes('FIRST OFFICER'));
+  g.player.scopeBearing = 30;
+  app.press('KeyV');
+  assert.ok(g.player.helmOrder !== null);
+  app.press('KeyB');
+  assert.equal(g.player.scopeBearing, 0);
+  const fs = app.peek('FS');
+  app.press('Equal');
+  assert.ok(app.peek('FS') >= fs);
+  assert.equal(app.peek('uiScale'), 1.1);
+  app.press('Minus');
+  assert.equal(app.peek('uiScale'), 1);
+  assert.deepEqual(app.errors, []);
+});

@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.1';
+const VERSION = '001.2';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -79,6 +79,7 @@ const TORPEDO = {
 };
 
 const CHARGE = { sinkRate: 3, radius: 85, maxDamage: 55, pattern: 5, interval: 2.5 };
+const ESCORT_LEASH = 4500;          // m from its convoy station before an escort gives up a hunt
 
 const SONAR_RANGE = 6000;
 const SONAR_SWEEP = 120;            // degrees per real second
@@ -224,24 +225,115 @@ function modelBuilder() {
       api.line(x0, y0, z0, x0, y1, z0); api.line(x1, y0, z0, x1, y1, z0);
       api.line(x1, y0, z1, x1, y1, z1); api.line(x0, y0, z1, x0, y1, z1);
     },
-    // Raked funnel: an octagonal prism whose top is moved aft by `rake`.
-    funnel(z, rx, rz, y0, y1, rake) {
-      const n = 8, bottom = [], top = [];
+    // Horizontal ring (n-gon) centred on (x, y, z).
+    ring(x, y, z, rx, rz, n) {
+      const pts = [];
       for (let i = 0; i < n; i++) {
         const a = (i / n) * TAU;
-        bottom.push([Math.cos(a) * rx, y0, z + Math.sin(a) * rz]);
-        top.push([Math.cos(a) * rx, y1, z - rake + Math.sin(a) * rz]);
+        pts.push([x + Math.cos(a) * rx, y, z + Math.sin(a) * rz]);
+      }
+      api.poly(pts, true);
+    },
+    // Raked funnel: a 12-sided prism whose top is moved aft by `rake`, with a cap and a band.
+    funnel(z, rx, rz, y0, y1, rake) {
+      const n = 12, bottom = [], top = [], band = [];
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * TAU, c = Math.cos(a), s = Math.sin(a);
+        bottom.push([c * rx, y0, z + s * rz]);
+        top.push([c * rx, y1, z - rake + s * rz]);
+        band.push([c * rx, y1 - (y1 - y0) * 0.18, z - rake * 0.82 + s * rz]);
       }
       api.poly(bottom, true);
       api.poly(top, true);
+      api.poly(band, true);
+      api.ring(0, y1 + 0.4, z - rake, rx * 1.08, rz * 1.08, n);       // cap
       for (let i = 0; i < n; i += 2) api.line(...bottom[i], ...top[i]);
     },
-    // Hull above the waterline: deck edge, waterline, stem, transom and a few frames.
+    // Railing along a polyline: top rail plus stanchions.
+    rail(pts, h, every) {
+      api.poly(pts.map(p => [p[0], p[1] + h, p[2]]));
+      for (let i = 0; i < pts.length; i += every || 1) api.line(pts[i][0], pts[i][1], pts[i][2], pts[i][0], pts[i][1] + h, pts[i][2]);
+    },
+    // Railing around the top of a box.
+    boxRail(x0, x1, y, z0, z1, h) {
+      const pts = [];
+      const nz = Math.max(2, Math.round((z1 - z0) / 2.5)), nx = Math.max(2, Math.round((x1 - x0) / 2.5));
+      for (let i = 0; i <= nz; i++) pts.push([x0, y, z0 + (z1 - z0) * i / nz]);
+      for (let i = 1; i <= nx; i++) pts.push([x0 + (x1 - x0) * i / nx, y, z1]);
+      for (let i = 1; i <= nz; i++) pts.push([x1, y, z1 - (z1 - z0) * i / nz]);
+      for (let i = 1; i <= nx; i++) pts.push([x1 - (x1 - x0) * i / nx, y, z0]);
+      api.rail(pts, h, 1);
+    },
+    // A row of windows on a face at z (facing fore or aft), between x0 and x1.
+    windows(x0, x1, y0, y1, z, n) {
+      for (let i = 0; i < n; i++) {
+        const a = x0 + (x1 - x0) * (i + 0.2) / n, b = x0 + (x1 - x0) * (i + 0.8) / n;
+        api.poly([[a, y0, z], [b, y0, z], [b, y1, z], [a, y1, z]], true);
+      }
+    },
+    // Portholes as small diamonds along a side.
+    portholes(x, y, z0, z1, n) {
+      const r = 0.35;
+      for (let i = 0; i < n; i++) {
+        const z = z0 + (z1 - z0) * (i + 0.5) / n;
+        api.poly([[x, y + r, z], [x, y, z + r], [x, y - r, z], [x, y, z - r]], true);
+      }
+    },
+    // Lifeboat on its davits.
+    lifeboat(x, y, z, len) {
+      const w = len * 0.17, hgt = len * 0.12, side = Math.sign(x) || 1;
+      const g = [];
+      for (let i = 0; i <= 8; i++) {
+        const t = i / 8, zz = z - len / 2 + len * t;
+        g.push([w * Math.sin(Math.PI * t) ** 0.6, zz]);
+      }
+      api.poly(g.map(p => [x + p[0], y, p[1]]));
+      api.poly(g.map(p => [x - p[0], y, p[1]]));
+      api.line(x, y - hgt, z - len * 0.42, x, y - hgt, z + len * 0.42);      // keel
+      api.line(x, y, z - len / 2, x, y - hgt, z - len * 0.42);
+      api.line(x, y, z + len / 2, x, y - hgt, z + len * 0.42);
+      for (const dz of [-len * 0.35, len * 0.35]) {                          // davits
+        api.line(x - side * 1.2, y - hgt - 0.6, z + dz, x - side * 1.2, y + 1.6, z + dz);
+        api.line(x - side * 1.2, y + 1.6, z + dz, x, y + 1.9, z + dz);
+      }
+    },
+    // Cowl ventilator.
+    vent(x, y, z, h, facing) {
+      api.line(x, y, z, x, y + h, z);
+      api.poly([[x - 0.45, y + h, z], [x - 0.45, y + h + 0.9, z + facing * 0.5], [x + 0.45, y + h + 0.9, z + facing * 0.5], [x + 0.45, y + h, z]], true);
+    },
+    // Mast with a yard (cross-tree) and shrouds down to the deck edges.
+    mast(z, y0, y1, yard, shroud, halfBeam) {
+      api.line(0, y0, z, 0, y1, z);
+      if (yard) {
+        api.line(-yard, y1 - 2, z, yard, y1 - 2, z);
+        api.line(-yard * 0.5, y1 - 4.5, z, yard * 0.5, y1 - 4.5, z);
+      }
+      if (shroud) for (const side of [-1, 1]) for (const dz of [-1.5, 0, 1.5]) api.line(0, y1 - 2, z, side * halfBeam, y0 + 0.8, z + dz);
+    },
+    // Gun mount: round base, shield and barrel(s) pointing along +z (or -z if dir < 0).
+    gun(z, y, size, dir, barrels) {
+      const d = dir || 1, s = size;
+      api.ring(0, y, z, s * 0.9, s * 0.9, 10);
+      api.ring(0, y + s * 0.35, z, s * 0.9, s * 0.9, 10);
+      const f = z + d * s * 0.7, b = z - d * s * 0.6;
+      api.poly([[-s * 0.85, y + s * 0.35, f], [s * 0.85, y + s * 0.35, f], [s * 0.7, y + s * 1.25, f - d * s * 0.2], [-s * 0.7, y + s * 1.25, f - d * s * 0.2]], true);
+      for (const x of [-s * 0.85, s * 0.85]) api.line(x, y + s * 0.35, f, x, y + s * 0.35, b);
+      api.line(-s * 0.7, y + s * 1.25, f - d * s * 0.2, -s * 0.7, y + s * 1.25, b);
+      api.line(s * 0.7, y + s * 1.25, f - d * s * 0.2, s * 0.7, y + s * 1.25, b);
+      const n = barrels || 1;
+      for (let i = 0; i < n; i++) {
+        const x = (i - (n - 1) / 2) * s * 0.45;
+        api.line(x, y + s * 0.8, f, x, y + s * 0.95, f + d * s * 3.4);
+      }
+    },
+    // Hull above the waterline: deck edge, bulwark, strake, waterline, stem, transom and frames.
     hull(o) {
       const L = o.length, B = o.beam, half = L / 2;
+      const N = 24;
       const zs = [];
-      for (let i = 0; i <= 12; i++) zs.push(-half + (L * i) / 12);
-      zs.push(half - o.bowLen * 0.5, half - o.bowLen * 0.2, half - o.bowLen * 0.05);
+      for (let i = 0; i <= N; i++) zs.push(-half + (L * i) / N);
+      zs.push(half - o.bowLen * 0.6, half - o.bowLen * 0.3, half - o.bowLen * 0.12, half - o.bowLen * 0.03);
       zs.sort((a, b) => a - b);
       const halfBeam = z => {
         if (z > half - o.bowLen) return (B / 2) * Math.sqrt(Math.max(0, (half - z) / o.bowLen));
@@ -254,23 +346,34 @@ function modelBuilder() {
       const deck = z => o.freeboard + (z > 0 ? o.sheerBow * (z / half) ** 2 : o.sheerStern * (z / half) ** 2);
       const wl = z => (z > 0 ? z * (half - o.rake) / half : z);
       const deckP = zs.map(z => [halfBeam(z), deck(z), z]);
+      const midP = zs.map(z => [halfBeam(z) * 0.995, deck(z) * 0.5, (z + wl(z)) / 2]);
       const wlP = zs.map(z => [halfBeam(z) * 0.97, 0, wl(z)]);
-      api.poly(deckP.map(p => [p[0], p[1], p[2]]));
-      api.poly(deckP.map(p => [-p[0], p[1], p[2]]));
-      api.poly(wlP.map(p => [p[0], p[1], p[2]]));
-      api.poly(wlP.map(p => [-p[0], p[1], p[2]]));
+      for (const side of [-1, 1]) {
+        api.poly(deckP.map(p => [side * p[0], p[1], p[2]]));
+        api.poly(midP.map(p => [side * p[0], p[1], p[2]]));
+        api.poly(wlP.map(p => [side * p[0], p[1], p[2]]));
+        if (o.rail) api.rail(deckP.map(p => [side * p[0] * 0.98, p[1], p[2]]), o.rail, 2);
+      }
       const last = zs.length - 1;
       api.line(0, deck(zs[last]), zs[last], 0, 0, wl(zs[last]));                 // stem
-      const s0 = deckP[0], w0 = wlP[0];
+      if (o.rail) api.line(0, deck(zs[last]), zs[last], 0, deck(zs[last]) + o.rail, zs[last]);
+      const s0 = deckP[0], m0 = midP[0], w0 = wlP[0];
       api.line(-s0[0], s0[1], s0[2], s0[0], s0[1], s0[2]);                      // transom
+      api.line(-m0[0], m0[1], m0[2], m0[0], m0[1], m0[2]);
       api.line(-w0[0], 0, w0[2], w0[0], 0, w0[2]);
       for (const side of [-1, 1]) {
         api.line(side * s0[0], s0[1], s0[2], side * w0[0], 0, w0[2]);
-        for (const i of [3, 6, 9]) {
-          const z = -half + (L * i) / 12;
+        for (let i = 2; i < N; i += 2) {                                         // frames
+          const z = -half + (L * i) / N;
           api.line(side * halfBeam(z), deck(z), z, side * halfBeam(z) * 0.97, 0, wl(z));
         }
       }
+      for (let i = 4; i < N; i += 4) {                                           // deck beams
+        const z = -half + (L * i) / N;
+        api.line(-halfBeam(z), deck(z), z, halfBeam(z), deck(z), z);
+      }
+      api.line(0, deck(-half), -half, 0, deck(half - o.bowLen * 0.3), half - o.bowLen * 0.3); // deck centreline
+      api.halfBeam = halfBeam;
       return deck;
     },
   };
@@ -279,87 +382,182 @@ function modelBuilder() {
 
 function buildFreighter() {
   const m = modelBuilder();
-  const deck = m.hull({ length: 125, beam: 17, freeboard: 7, sheerBow: 3, sheerStern: 1.5, bowLen: 22, sternLen: 14, sternWidth: 0.55, rake: 5 });
+  const deck = m.hull({ length: 125, beam: 17, freeboard: 7, sheerBow: 3, sheerStern: 1.5, bowLen: 22, sternLen: 14, sternWidth: 0.55, rake: 5, rail: 1.1 });
+  const hb = m.halfBeam;
   m.box(-6.5, 6.5, 7.2, 10.5, -3, 12);                     // midships house
-  m.box(-5, 5, 10.5, 13.5, -1, 10);
+  m.portholes(6.5, 8.8, -2, 11, 6);
+  m.portholes(-6.5, 8.8, -2, 11, 6);
+  m.box(-5, 5, 10.5, 13.5, -1, 10);                        // boat deck house
+  m.windows(-4.5, 4.5, 11.3, 12.7, 10, 6);
+  m.boxRail(-6.5, 6.5, 10.5, -3, 12, 1);
   m.box(-3, 3, 13.5, 16, 4, 9);                            // wheelhouse
+  m.windows(-2.7, 2.7, 14.3, 15.4, 9, 5);
   m.line(-8.5, 13.5, 8, 8.5, 13.5, 8);                     // bridge wings
+  m.line(-8.5, 13.5, 6.5, 8.5, 13.5, 6.5);
+  m.line(-8.5, 13.5, 8, -8.5, 13.5, 6.5);
+  m.line(8.5, 13.5, 8, 8.5, 13.5, 6.5);
+  m.line(0, 16, 6.5, 0, 19, 6.5);                          // wheelhouse mast
   m.funnel(-8, 2.2, 2.6, 10.5, 22, 1.6);
-  for (const z of [38, -38]) {                             // masts and derricks
-    m.line(0, deck(z), z, 0, 30, z);
-    m.line(-3.5, 26, z, 3.5, 26, z);
-    m.line(0, 26, z, -3.5, deck(z), z);
-    m.line(0, 26, z, 3.5, deck(z), z);
+  for (const x of [-5.6, 5.6]) for (const z of [-1.5, 6]) m.lifeboat(x, 11.4, z, 6.5);
+  for (const [x, z, f] of [[-3, -12, 1], [3, -12, 1], [-2.5, 14, -1], [2.5, 14, -1]]) m.vent(x, deck(z), z, 2.6, f);
+  for (const z of [38, -38]) {                             // masts, derricks and rigging
+    const y0 = deck(z);
+    m.mast(z, y0, 30, 3.5, true, hb(z));
+    m.line(0, 30, z, 0, 34, z);                            // topmast
+    m.box(-1.2, 1.2, y0, y0 + 3, z - 1.2, z + 1.2);        // mast house / winches
     const dz = z > 0 ? 1 : -1;
-    m.line(0, deck(z) + 2, z, 0, deck(z) + 8, z + dz * 14);
-    m.line(0, deck(z) + 2, z, 0, deck(z) + 8, z - dz * 14);
+    for (const x of [-1.8, 1.8]) {
+      m.line(x * 0.5, y0 + 3, z, x * 2.2, y0 + 8, z + dz * 15);
+      m.line(x * 0.5, y0 + 3, z, x * 2.2, y0 + 8, z - dz * 15);
+      m.line(0, 26, z, x * 2.2, y0 + 8, z + dz * 15);      // topping lifts
+      m.line(0, 26, z, x * 2.2, y0 + 8, z - dz * 15);
+    }
   }
+  m.line(0, 34, 38, 0, deck(61) + 1, 61);                  // forestay
+  m.line(0, 34, -38, 0, deck(-61) + 1, -61);               // backstay
   for (const [z0, z1] of [[46, 54], [22, 31], [-28, -19], [-50, -42]]) {
     const d = deck((z0 + z1) / 2);
-    m.box(-4, 4, d, d + 1.4, z0, z1);                      // hatches
+    m.box(-4, 4, d, d + 1.4, z0, z1);                      // hatches with boards
+    for (let z = z0 + 2; z < z1; z += 2) m.line(-4, d + 1.4, z, 4, d + 1.4, z);
+    m.line(0, d + 1.4, z0, 0, d + 1.4, z1);
   }
   m.box(-6, 6, 7.8, 10.5, -60, -50);                       // poop house
+  m.boxRail(-6, 6, 10.5, -60, -50, 1);
+  m.portholes(6, 9, -59, -51, 4);
+  m.portholes(-6, 9, -59, -51, 4);
+  m.box(-5, 5, deck(56), deck(56) + 2.2, 54, 59);          // forecastle head
+  for (const x of [-2, 2]) m.ring(x, deck(58) + 2.3, 58, 0.6, 0.6, 6);  // windlass
   return m.edges;
 }
 
 function buildTanker() {
   const m = modelBuilder();
-  const deck = m.hull({ length: 145, beam: 19, freeboard: 4.5, sheerBow: 2.5, sheerStern: 1, bowLen: 25, sternLen: 12, sternWidth: 0.6, rake: 6 });
+  const deck = m.hull({ length: 145, beam: 19, freeboard: 4.5, sheerBow: 2.5, sheerStern: 1, bowLen: 25, sternLen: 12, sternWidth: 0.6, rake: 6, rail: 1.1 });
+  const hb = m.halfBeam;
   m.box(-7, 7, 4.6, 8.5, 18, 28);                          // midships bridge
+  m.portholes(7, 6.5, 19, 27, 5);
+  m.portholes(-7, 6.5, 19, 27, 5);
   m.box(-5, 5, 8.5, 11.5, 20, 27);
+  m.windows(-4.6, 4.6, 9.4, 10.8, 27, 6);
+  m.boxRail(-7, 7, 8.5, 18, 28, 1);
   m.line(-9, 11.5, 25, 9, 11.5, 25);
+  m.line(0, 11.5, 23, 0, 15, 23);
   m.box(-8.5, 8.5, 4.6, 9.5, -72, -48);                    // aft house
+  m.portholes(8.5, 7, -70, -50, 8);
+  m.portholes(-8.5, 7, -70, -50, 8);
   m.box(-6, 6, 9.5, 12.5, -68, -53);
+  m.windows(-5.5, 5.5, 10.3, 11.7, -53, 6);
+  m.boxRail(-8.5, 8.5, 9.5, -72, -48, 1);
+  for (const x of [-7.4, 7.4]) for (const z of [-58, -65]) m.lifeboat(x, 10.6, z, 6.5);
   m.funnel(-61, 2.4, 3, 12.5, 21, 1.2);
-  m.line(0, 7, -48, 0, 7, 18);                             // catwalk
+  // raised catwalk with stanchions from the poop to the forecastle
+  const cw = [];
+  for (let z = -48; z <= 62; z += 4) if (z < 18 || z > 28) cw.push([0, 7, z]);
+  m.line(0, 7, -48, 0, 7, 18);
   m.line(0, 7, 28, 0, 7, 62);
-  for (let z = -40; z <= 60; z += 20) if (z < 18 || z > 28) m.line(0, deck(z), z, 0, 7, z);
-  for (const x of [-3, 3]) m.line(x, 4.8, -46, x, 4.8, 16);  // deck pipes
-  m.line(0, deck(58), 58, 0, 20, 58);                      // foremast
-  m.line(-3, 17, 58, 3, 17, 58);
-  m.line(0, 12.5, -58, 0, 22, -58);                        // aft mast
+  for (const x of [-0.7, 0.7]) { m.line(x, 8, -48, x, 8, 18); m.line(x, 8, 28, x, 8, 62); }
+  for (const [x, y, z] of cw) { m.line(x, deck(z), z, x, y, z); m.line(-0.7, y, z, -0.7, y + 1, z); m.line(0.7, y, z, 0.7, y + 1, z); }
+  for (const x of [-3, 3, -5, 5]) m.line(x, 4.8, -46, x, 4.8, 16);  // deck pipes
+  for (const x of [-3, 3]) m.line(x, 4.8, 30, x, 4.8, 55);
+  for (let z = -40; z <= 54; z += 10) if (z < 14 || z > 30) {        // tank hatches
+    m.ring(-6, deck(z) + 0.6, z, 1, 1, 8);
+    m.ring(6, deck(z) + 0.6, z, 1, 1, 8);
+    m.line(-6, deck(z), z, -6, deck(z) + 0.6, z);
+    m.line(6, deck(z), z, 6, deck(z) + 0.6, z);
+  }
+  for (const z of [-20, 40]) {                                       // kingposts and hoses
+    m.line(-2.5, deck(z), z, -2.5, deck(z) + 9, z);
+    m.line(2.5, deck(z), z, 2.5, deck(z) + 9, z);
+    m.line(-2.5, deck(z) + 9, z, 2.5, deck(z) + 9, z);
+    m.line(-2.5, deck(z) + 8, z, -7, deck(z) + 3, z + 4);
+    m.line(2.5, deck(z) + 8, z, 7, deck(z) + 3, z + 4);
+  }
+  m.mast(58, deck(58), 20, 3, true, hb(58));                         // foremast
+  m.mast(-58, 12.5, 23, 2.5, false, 0);                              // aft mast
+  m.line(0, 20, 58, 0, deck(71) + 1, 71);
+  m.line(0, 20, 58, 0, 15, 23);
+  m.line(0, 23, -58, 0, 15, 23);                                     // aerial
+  for (const [x, z, f] of [[-4, -46, 1], [4, -46, 1], [-3, 16, 1], [3, 16, 1]]) m.vent(x, deck(z), z, 2.2, f);
   return m.edges;
 }
 
 function buildDestroyer() {
   const m = modelBuilder();
-  const deck = m.hull({ length: 95, beam: 9.4, freeboard: 4.2, sheerBow: 3.2, sheerStern: 0.3, bowLen: 22, sternLen: 10, sternWidth: 0.7, rake: 4 });
-  m.box(-3, 3, 6.4, 10, 14, 22);                           // bridge
+  const deck = m.hull({ length: 95, beam: 9.4, freeboard: 4.2, sheerBow: 3.2, sheerStern: 0.3, bowLen: 22, sternLen: 10, sternWidth: 0.7, rake: 4, rail: 0.9 });
+  const hb = m.halfBeam;
+  m.box(-3, 3, deck(22), 10, 14, 22);                      // bridge
+  m.windows(-2.7, 2.7, 8.6, 9.6, 22, 5);
   m.box(-2.5, 2.5, 10, 12.5, 15, 20);
+  m.windows(-2.2, 2.2, 10.8, 12, 20, 4);
+  m.boxRail(-3, 3, 12.5, 15, 20, 0.9);
+  m.box(-1.2, 1.2, 12.5, 14.2, 15.5, 18);                  // director
+  m.line(-2, 13.4, 16.7, 2, 13.4, 16.7);                   // rangefinder
   m.line(0, 12.5, 13, 0, 24, 12);                          // foremast
   m.line(-0.8, 6.4, 14, 0, 18, 12.5);
   m.line(0.8, 6.4, 14, 0, 18, 12.5);
   m.line(-3, 21, 12.2, 3, 21, 12.2);
+  m.line(-1.8, 18.5, 12.3, 1.8, 18.5, 12.3);
+  m.ring(0, 17, 12.4, 0.9, 0.9, 8);                        // crow's nest
+  for (const side of [-1, 1]) m.line(0, 21, 12.2, side * hb(12) * 0.95, deck(12) + 0.5, 11);
+  m.line(0, 24, 12, 0, deck(45) + 1, 45);                  // jackstay
   m.funnel(5, 1.5, 2.3, 4.5, 13, 0.8);
   m.funnel(-7, 1.5, 2.3, 4.5, 12.5, 0.8);
-  m.box(-1.5, 1.5, deck(33), deck(33) + 2, 31, 35);        // A gun
-  m.line(0, deck(33) + 1.2, 35, 0, deck(33) + 1.6, 41);
-  m.box(-1.5, 1.5, 7.6, 9.6, 23, 26.5);                    // B gun, superfiring
-  m.line(0, 8.8, 26.5, 0, 9.2, 32);
-  m.box(-1.5, 1.5, 4.4, 6.4, -31, -27.5);                  // X gun
-  m.line(0, 5.6, -31, 0, 6, -36);
-  m.box(-1.5, 1.5, 4.4, 6.4, -40, -36.5);                  // Y gun
-  m.line(0, 5.6, -40, 0, 6, -45);
-  m.box(-1.2, 1.2, 4.4, 5.6, -18, -12);                    // torpedo tubes
-  for (const x of [-2, 2]) m.line(x, 4.6, -47, x, 4.6, -41); // depth-charge rails
+  m.gun(33, deck(33), 1.6, 1);                             // A gun
+  m.gun(24.5, 7.6, 1.6, 1);                                // B gun, superfiring
+  m.box(-1.8, 1.8, deck(24.5), 7.6, 23, 26);
+  m.gun(-29, 5.2, 1.6, -1);                                // X gun
+  m.box(-1.8, 1.8, 4.4, 5.2, -30.5, -27.5);
+  m.gun(-38, deck(-38), 1.6, -1);                          // Y gun
+  for (const z of [-15, -21]) {                            // triple torpedo tubes on turntables
+    m.ring(0, 4.5, z, 1.6, 1.6, 10);
+    for (const x of [-0.6, 0, 0.6]) m.line(x, 5.1, z - 3.5, x, 5.1, z + 3.5);
+    m.line(-0.9, 5.1, z - 3.5, 0.9, 5.1, z - 3.5);
+    m.line(-0.9, 5.1, z + 3.5, 0.9, 5.1, z + 3.5);
+  }
+  m.box(-1, 1, 4.4, 7, -3, 0);                             // searchlight platform
+  m.ring(0, 7.6, -1.5, 0.6, 0.6, 8);
+  for (const x of [-2, 2]) m.line(x, 4.6, -47, x, 4.6, -41);  // depth-charge rails
+  for (let z = -46; z <= -42; z += 1.5) for (const x of [-2, 2]) m.ring(x, 4.9, z, 0.35, 0.35, 6);
+  for (const x of [-3.4, 3.4]) m.line(x, 4.4, -34, x * 1.25, 5.6, -34.6); // throwers
   m.line(0, 4.4, -20, 0, 14, -20);                         // aft mast
+  m.line(-1.6, 12.5, -20, 1.6, 12.5, -20);
+  m.line(0, 14, -20, 0, 24, 12);                           // aerial
+  for (const x of [-3.9, 3.9]) m.lifeboat(x, 6, -4, 5);    // whalers
   return m.edges;
 }
 
 function buildCorvette() {
   const m = modelBuilder();
-  const deck = m.hull({ length: 62, beam: 10, freeboard: 4.6, sheerBow: 2.8, sheerStern: 0.5, bowLen: 14, sternLen: 8, sternWidth: 0.65, rake: 3 });
+  const deck = m.hull({ length: 62, beam: 10, freeboard: 4.6, sheerBow: 2.8, sheerStern: 0.5, bowLen: 14, sternLen: 8, sternWidth: 0.65, rake: 3, rail: 0.9 });
+  const hb = m.halfBeam;
   const d = deck(23);
-  m.box(-1.2, 1.2, d, d + 1.6, 21, 23.5);                  // 4-inch gun
-  m.line(0, d + 1, 23.5, 0, d + 1.3, 29);
+  m.gun(22.5, d + 0.4, 1.3, 1);                            // 4-inch gun on its bandstand
+  m.ring(0, d + 0.4, 22.5, 1.9, 1.9, 10);
   m.box(-3.5, 3.5, 4.8, 8.6, 5, 13);                       // bridge
+  m.portholes(3.5, 6.8, 6, 12, 4);
+  m.portholes(-3.5, 6.8, 6, 12, 4);
   m.box(-2.6, 2.6, 8.6, 11, 7, 12);
+  m.windows(-2.4, 2.4, 9.3, 10.4, 12, 4);
+  m.boxRail(-3.5, 3.5, 8.6, 5, 13, 0.9);
   m.line(-5, 8.6, 10, 5, 8.6, 10);
   m.line(0, deck(16), 16, 0, 21, 16);                      // mast in front of the bridge
+  m.line(-1.6, 19, 16, 1.6, 19, 16);
   m.box(-0.8, 0.8, 16, 17.5, 15.2, 16.8);                  // crow's nest
+  for (const side of [-1, 1]) m.line(0, 19, 16, side * hb(16), deck(16) + 0.4, 15);
+  m.line(0, 21, 16, 0, deck(30) + 1, 30);
   m.funnel(-1, 1.7, 2.2, 4.8, 12.5, 0.7);
   m.box(-1.2, 1.2, 4.8, 6.4, -16, -13);                    // pom-pom
-  for (const x of [-1.8, 1.8]) m.line(x, 4.7, -30, x, 4.7, -25);
+  m.ring(0, 6.4, -14.5, 1.6, 1.6, 10);
+  m.line(-0.3, 6.8, -14.5, -0.3, 7.3, -11);
+  m.line(0.3, 6.8, -14.5, 0.3, 7.3, -11);
+  for (const x of [-1.8, 1.8]) m.line(x, 4.7, -30, x, 4.7, -25);   // depth-charge rails
+  for (let z = -29.5; z <= -25.5; z += 1.3) for (const x of [-1.8, 1.8]) m.ring(x, 5, z, 0.32, 0.32, 6);
+  for (const x of [-4, 4]) m.line(x, 4.6, -21, x * 1.2, 5.8, -21.5);  // throwers
+  for (const x of [-4.2, 4.2]) m.lifeboat(x, 6.4, -6, 4.8);
+  m.line(-1, deck(-4), -4, -1, 8, -4);                     // minesweeping davit
+  m.line(-1, 8, -4, -3.5, 8.4, -5);
+  m.vent(2, deck(-9), -9, 2, 1);
+  m.vent(-2, deck(-9), -9, 2, 1);
   return m.edges;
 }
 
@@ -367,14 +565,50 @@ function buildTClass() {
   const m = modelBuilder();
   m.hull({ length: 84, beam: 8, freeboard: 1.4, sheerBow: 1.2, sheerStern: 0.2, bowLen: 20, sternLen: 18, sternWidth: 0.2, rake: 2 });
   m.box(-1.7, 1.7, 1.4, 5.2, 2, 12);                       // conning tower
+  m.poly([[-1.7, 5.2, 12], [0, 5.2, 14.5], [1.7, 5.2, 12]]); // fairing
+  m.line(0, 1.4, 14.5, 0, 5.2, 14.5);
   m.box(-1.2, 1.2, 5.2, 6, 4, 10);                         // bridge
-  m.line(0, 6, 8.5, 0, 12.5, 8.5);                         // periscopes
+  m.windows(-1, 1, 5.35, 5.85, 10, 3);
+  m.line(0, 6, 8.5, 0, 12.5, 8.5);                         // periscopes in their standards
   m.line(0, 6, 6.5, 0, 11.5, 6.5);
   m.line(-0.4, 12.5, 8.5, 0.4, 12.5, 8.5);
-  m.box(-0.9, 0.9, 1.4, 2.6, 16, 18.5);                    // deck gun
-  m.line(0, 2.2, 18.5, 0, 2.5, 23);
+  m.ring(0, 8, 8.5, 0.5, 0.5, 6);
+  m.ring(0, 8, 6.5, 0.5, 0.5, 6);
+  m.line(0, 6, 4.5, 0, 10, 4.5);                           // radio mast
+  m.line(-0.6, 9.5, 4.5, 0.6, 9.5, 4.5);
+  m.gun(17.2, 1.4, 1, 1);                                  // deck gun
   m.line(0, 1.4, 40, 0, 5.2, 12);                          // jumping wires
   m.line(0, 5.2, 2, 0, 1.4, -38);
+  m.line(0, 1.4, 41.5, 0, 3.4, 37);                        // net cutter
+  for (const x of [-2.4, 2.4]) m.line(x, 0.4, 36, x, 0.4, 24);  // external bow tube bulges
+  for (let z = -30; z <= 30; z += 6) m.line(-1.5, 1.45, z, 1.5, 1.45, z);  // casing gratings
+  for (const x of [-1.5, 1.5]) m.line(x, 1.45, -32, x, 1.45, 32);
+  return m.edges;
+}
+
+function buildTorpedo() {
+  // Stylised G7-type torpedo, about twice life size so it reads in the periscope.
+  const m = modelBuilder();
+  const L = 13, r = 0.55, n = 8;
+  const st = [[L / 2, 0.02], [L / 2 - 0.3, 0.45], [L / 2 - 0.8, 0.8], [L / 2 - 1.6, 1], [L / 2 - 3, 1], [0, 1], [-L / 2 + 2.6, 1], [-L / 2 + 1.2, 0.7], [-L / 2 + 0.4, 0.42]];
+  const rings = st.map(([z, k]) => {
+    const pts = [];
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * TAU;
+      pts.push([Math.cos(a) * r * k, Math.sin(a) * r * k, z]);
+    }
+    return pts;
+  });
+  rings.forEach((pts, i) => { if (i > 0) m.poly(pts, true); });
+  for (let i = 0; i < n; i += 2) {
+    m.line(0, 0, L / 2, rings[1][i][0], rings[1][i][1], rings[1][i][2]);
+    for (let j = 1; j < rings.length - 1; j++) m.line(...rings[j][i], ...rings[j + 1][i]);
+  }
+  const tz = -L / 2 + 0.4;                                  // cruciform fins
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    m.poly([[dx * r * 0.6, dy * r * 0.6, tz + 1.6], [dx * r * 1.9, dy * r * 1.9, tz + 0.9], [dx * r * 1.9, dy * r * 1.9, tz], [dx * r * 0.42, dy * r * 0.42, tz]]);
+  }
+  m.line(0, 0, tz, 0, 0, tz - 0.9);                         // propeller shaft
   return m.edges;
 }
 
@@ -390,7 +624,10 @@ function buildPlane(span, length, engines, flyingBoat) {
   m.poly([[-span * 0.17, fh * 0.4, -L + 2.5], [span * 0.17, fh * 0.4, -L + 2.5], [span * 0.17, fh * 0.4, -L], [-span * 0.17, fh * 0.4, -L]], true);
   m.poly([[0, fh * 0.6, -L + 3.5], [0, fh * 0.6 + 4.5, -L + 0.5], [0, fh * 0.6 + 4.5, -L], [0, fh * 0.6, -L]], false);
   const xs = engines === 4 ? [-9, -4.5, 4.5, 9] : [-4, 4];
-  for (const x of xs) m.box(x - 0.7, x + 0.7, wy - 1.2, wy, wz - chord * 0.6, wz + 1.5);
+  for (const x of xs) {
+    m.box(x - 0.7, x + 0.7, wy - 1.2, wy, wz - chord * 0.6, wz + 1.5);
+    m.ring(x, wy - 0.6, wz + 1.7, 1.6, 0.01, 8);            // propeller disc (edge-on)
+  }
   if (flyingBoat) for (const x of [-span * 0.42, span * 0.42]) m.line(x, wy, wz - chord * 0.6, x, wy - 3, wz - chord * 0.6);
   return m.edges;
 }
@@ -403,6 +640,15 @@ const MODELS = {
   tclass: buildTClass(),
   sunderland: buildPlane(34, 26, 4, true),
   hudson: buildPlane(20, 14, 2, false),
+};
+const TORPEDO_MODEL = buildTorpedo();
+// Where the fires burn (deck height) and the funnels smoke, per class: [x, y, z] in the model frame.
+const SHIP_FX = {
+  freighter: { deck: 7.2, funnels: [[0, 22.4, -9.6]], smoke: 1 },
+  tanker:    { deck: 4.8, funnels: [[0, 21.4, -62.2]], smoke: 0.8 },
+  destroyer: { deck: 4.4, funnels: [[0, 13.4, 4.2], [0, 12.9, -7.8]], smoke: 0.7 },
+  corvette:  { deck: 4.8, funnels: [[0, 12.9, -1.7]], smoke: 0.8 },
+  tclass:    { deck: 1.5, funnels: [], smoke: 0 },
 };
 
 /* =========================================================
@@ -436,6 +682,8 @@ function createGame(opts = {}) {
       periscopeUp: true,
       periscopeRaise: 1,
       scopeBearing: 0,              // relative to the bow
+      helmOrder: null,              // true course the auto helm steers to (null = manual rudder)
+      scopeTarget: null,            // true bearing the periscope is trained on and held (null = manual)
       zoom: 0,                      // 0 = low power, 1 = high power
       silent: false,
       battery: 100,
@@ -465,6 +713,7 @@ function createGame(opts = {}) {
     air: { on: false, nextT: 0 },
     warn: { torpedo: false, aircraft: false, mines: false },
     detected: false,
+    blast: null,                    // last depth-charge explosion: the churned water blinds the escorts
     asdicNear: 0,                   // real time of the last enemy ping heard close by
     sonar: { sweep: 0, blips: [], ping: null, pingReady: 0 },
     patrol: 0,
@@ -480,6 +729,7 @@ function createGame(opts = {}) {
       airAttacks: 0, torpedoesDodged: 0, torpedoHits: 0, minesHit: 0,
     },
   };
+  g.ai = aiInit(opts.ai);
   if (!opts.noPatrol) startPatrol(g, opts.mission);
   return g;
 }
@@ -780,7 +1030,17 @@ function command(g, cmd, arg) {
       break;
     case 'zoomIn': p.zoom = 1; break;
     case 'zoomOut': p.zoom = 0; break;
-    case 'scopeToBow': p.scopeBearing = 0; break;
+    case 'scopeToBow': p.scopeBearing = 0; p.scopeTarget = null; break;
+    case 'steerToScope': {
+      // Come to the periscope bearing; the periscope stays on that bearing while the boat swings.
+      const b = viewHeading(g);
+      p.helmOrder = b;
+      p.scopeTarget = b;
+      say(g, `COME TO ${brg3(b)}`);
+      break;
+    }
+    case 'helm': p.helmOrder = arg === null ? null : wrap360(arg); break;
+    case 'scopeTo': p.scopeTarget = arg === null ? null : wrap360(arg); break;
     case 'silent':
       p.silent = !p.silent;
       say(g, p.silent ? 'SILENT RUNNING' : 'SILENT RUNNING CANCELLED', p.silent ? 'blue' : 'green');
@@ -856,6 +1116,18 @@ function updateLock(g) {
   }
 }
 
+// Where a torpedo fired now from the bow (or stern) tube ends its gyro turn onto `course`, and when.
+function gyroTurnEnd(p, stern, course) {
+  const launch = stern ? wrap360(p.heading + 180) : p.heading;
+  const off = SUB.length / 2;
+  const sx = p.x + Math.sin(launch * DEG) * off, sy = p.y + Math.cos(launch * DEG) * off;
+  const dA = angleDiff(course, launch);
+  if (Math.abs(dA) < 0.01) return { x: sx, y: sy, t: 0 };
+  const w = TORPEDO.turnRate * DEG, k = (TORPEDO.speedKn * KN) / (Math.sign(dA) * w);
+  const a0 = launch * DEG, a1 = (launch + dA) * DEG;
+  return { x: sx + k * (Math.cos(a0) - Math.cos(a1)), y: sy + k * (Math.sin(a1) - Math.sin(a0)), t: Math.abs(dA) * DEG / w };
+}
+
 // Firing solution from the (possibly stale, possibly inexact) observation.
 function firingSolution(g) {
   const p = g.player, lock = p.lock;
@@ -867,8 +1139,17 @@ function firingSolution(g) {
   const ty0 = p.y + Math.cos(o.bearing * DEG) * o.range;
   const tx = tx0 + Math.sin(o.course * DEG) * v * age;
   const ty = ty0 + Math.cos(o.course * DEG) * v * age;
-  const sol = interceptCourse(p.x, p.y, tx, ty, Math.sin(o.course * DEG) * v, Math.cos(o.course * DEG) * v, TORPEDO.speedKn * KN);
+  const tvx = Math.sin(o.course * DEG) * v, tvy = Math.cos(o.course * DEG) * v, vt = TORPEDO.speedKn * KN;
+  let sol = interceptCourse(p.x, p.y, tx, ty, tvx, tvy, vt);
   if (!sol) return null;
+  // The torpedo leaves the bow (or stern) and curves onto its gyro course: aim from the end of that turn.
+  const stern = p.selectedTube === 4;
+  for (let i = 0; i < 4; i++) {
+    const q = gyroTurnEnd(p, stern, sol.course);
+    const s2 = interceptCourse(q.x, q.y, tx + tvx * q.t, ty + tvy * q.t, tvx, tvy, vt);
+    if (!s2) break;
+    sol = { course: s2.course, time: s2.time + q.t };
+  }
   sol.stale = age > 1;
   sol.range = Math.hypot(tx - p.x, ty - p.y);
   return sol;
@@ -913,6 +1194,7 @@ function fireTorpedo(g) {
     course,
     run: 0,
     dud: g.rng() < g.diff.dudChance,
+    targetId: p.lock ? p.lock.id : null,
     trail: [],
     trailRun: 0,
   });
@@ -961,6 +1243,7 @@ function step(g, realDt, input) {
   input = input || {};
   realDt = Math.min(Math.max(realDt, 0), 0.1);
   g.realTime += realDt;
+  updateAI(g, realDt);
   updateControls(g, realDt, input);
   let remaining = realDt * TIME_SCALE;
   while (remaining > 1e-6) {
@@ -976,12 +1259,26 @@ function step(g, realDt, input) {
 function updateControls(g, dt, input) {
   const p = g.player;
   if (!p.alive) return;
+  if (input.rudderLeft || input.rudderRight) p.helmOrder = null;          // a hand on the wheel takes over
   if (input.rudderLeft && !input.rudderRight) p.rudder = Math.max(-SUB.rudderMax, p.rudder - SUB.rudderRate * dt);
   else if (input.rudderRight && !input.rudderLeft) p.rudder = Math.min(SUB.rudderMax, p.rudder + SUB.rudderRate * dt);
+  else if (p.helmOrder !== null) {
+    // Auto helm: rudder proportional to the course error, damped by the rate of turn.
+    const err = angleDiff(p.helmOrder, p.heading);
+    const want = clamp(err * 3 - p.turnRate * 40, -SUB.rudderMax, SUB.rudderMax);
+    p.rudder += clamp(want - p.rudder, -SUB.rudderRate * dt, SUB.rudderRate * dt);
+  }
   else p.rudder = p.rudder > 0 ? Math.max(0, p.rudder - SUB.rudderRate * 0.7 * dt) : Math.min(0, p.rudder + SUB.rudderRate * 0.7 * dt);
   const rate = SUB.scopeRate * (p.zoom ? 0.3 : 1) * (input.scopeFast ? 3 : 1);
+  if (input.scopeLeft || input.scopeRight) p.scopeTarget = null;
   if (input.scopeLeft) p.scopeBearing = angleDiff(p.scopeBearing - rate * dt, 0);
   if (input.scopeRight) p.scopeBearing = angleDiff(p.scopeBearing + rate * dt, 0);
+  if (p.scopeTarget !== null && !input.scopeLeft && !input.scopeRight) {
+    // Trained periscope: swing to the bearing and hold it while the boat turns.
+    const d = angleDiff(angleDiff(p.scopeTarget, p.heading), p.scopeBearing);
+    const r = SUB.scopeRate * 3 * dt;
+    p.scopeBearing = angleDiff(p.scopeBearing + clamp(d, -r, r), 0);
+  }
   p.periscopeRaise = clamp(p.periscopeRaise + (p.periscopeUp ? 1.2 : -1.6) * dt, 0, 1);
 }
 
@@ -1158,15 +1455,19 @@ function escortDetect(g, s, d) {
     const R = (900 + 120 * Math.abs(p.speed)) * vis * (g.cond.sea === 'storm' ? 0.5 : 1);
     if (d < R) pr += 0.8 * (1 - d / R);
   }
-  let hr = (300 + 3200 * p.noise) * g.cond.hear;
+  // Water churned up by recent depth-charge explosions blinds hydrophones and ASDIC for a while.
+  const churn = g.blast && g.time - g.blast.t < 60 && dist2d(p.x, p.y, g.blast.x, g.blast.y) < 700 ? 0.2 : 1;
+  let hr = (300 + 3200 * p.noise) * g.cond.hear * churn;
   if (s.speed > 20) hr *= 0.35;
   if (p.depth > THERMOCLINE) hr *= 0.55;
   if (d < hr) pr += 0.6 * (1 - d / hr);
   if (p.depth >= SURFACED_DEPTH) {
-    let ar = 1800;
+    let ar = 1800 * churn;
     if (p.depth > THERMOCLINE) ar *= 0.45;
     if (s.speed > 22) ar *= 0.4;
-    if (d < ar) pr += 0.9 * (1 - d / ar);
+    // ASDIC loses a deep boat in the last stretch before the escort runs over it.
+    const blind = clamp(p.depth * 1.6, 60, 220);
+    if (d < ar && d > blind) pr += 0.9 * (1 - d / ar);
   }
   return pr * g.diff.sense;
 }
@@ -1245,6 +1546,18 @@ function stepEscort(g, s, dt) {
     });
     g.effects.push({ type: 'flash', x: s.x, y: s.y, h: 8, t: 0, dur: 0.35 });
     emit(g, 'gun', { dist: d });
+  }
+
+  // Convoy escorts cannot stray far: beyond the leash they give up the hunt and rejoin.
+  if (g.convoy && (ai.state === 'attack' || ai.state === 'hunt')) {
+    const st = stationPoint(g, s);
+    if (dist2d(s.x, s.y, st.x, st.y) > ESCORT_LEASH) {
+      ai.state = 'escort';
+      ai.hasContact = false;
+      ai.contact = 0;
+      ai.lastKnownT = -1e9;
+      ai.drops = [];
+    }
   }
 
   let tx, ty, spd;
@@ -1415,6 +1728,7 @@ function stepCharges(g, dt) {
     if (p.alive && d < k.radius) dmg = k.maxDamage * (1 - d / k.radius) ** 2 * g.diff.damage;
     if (p.alive && d < 250) g.stats.chargesNear++;
     spawnGeyser(g, c.x, c.y, clamp(45 * (1 - c.depth / 90), 4, 45), 3.5);
+    g.blast = { x: c.x, y: c.y, t: g.time };
     emit(g, 'charge', { dist: d, damage: dmg });
     if (dmg > 0.5) {
       if (dmg > 12) addCrack(g, dmg);
@@ -1857,7 +2171,7 @@ function sonarSources(g) {
     const loud = s.sinking ? 0.7 : base * (0.5 + s.speed / cls.maxSpeed);
     out.push({ id: s.id, x: s.x, y: s.y, type: submerged && !s.sinking ? 'sub' : 'surface', loud });
   }
-  for (const t of g.torpedoes) out.push({ id: t.id, x: t.x, y: t.y, type: 'torpedo', loud: 0.5 });
+  for (const t of g.torpedoes) out.push({ id: t.id, x: t.x, y: t.y, type: 'torpedo', loud: 0.5, heading: t.heading, own: t.owner === 'player' });
   for (const c of g.charges) out.push({ id: c.id, x: c.x, y: c.y, type: 'charge', loud: 0.4 });
   for (const m of g.mines) out.push({ id: m.id, x: m.x, y: m.y, type: 'mine', loud: 0.034 }); // silent: heard only very close
   return out;
@@ -1881,7 +2195,7 @@ function updateSonar(g, dt) {
     const bErr = g.rng.gauss() * 2;
     const bb = (b + bErr) * DEG;
     so.blips = so.blips.filter(x => !(x.id === src.id && !x.active));
-    so.blips.push({ id: src.id, x: p.x + Math.sin(bb) * r * rErr, y: p.y + Math.cos(bb) * r * rErr, type: src.type, t: g.realTime, active: false, fuzz: r * 0.08 });
+    so.blips.push({ id: src.id, x: p.x + Math.sin(bb) * r * rErr, y: p.y + Math.cos(bb) * r * rErr, type: src.type, t: g.realTime, active: false, fuzz: r * 0.08, heading: src.heading, own: src.own });
   }
   if (so.ping) {
     const r0 = so.ping.r;
@@ -1891,7 +2205,7 @@ function updateSonar(g, dt) {
       if (r < r0 || r >= so.ping.r) continue;
       if (src.type === 'mine' && r > 3000) continue;
       so.blips = so.blips.filter(x => x.id !== src.id || !x.active);
-      so.blips.push({ id: src.id, x: src.x, y: src.y, type: src.type, t: g.realTime, active: true, fuzz: 0 });
+      so.blips.push({ id: src.id, x: src.x, y: src.y, type: src.type, t: g.realTime, active: true, fuzz: 0, heading: src.heading, own: src.own });
       if (src.type === 'surface') emit(g, 'echo', { dist: r });
     }
     if (so.ping.r > SONAR_RANGE) so.ping = null;
@@ -1915,6 +2229,390 @@ function updateSonar(g, dt) {
     say(g, 'WE HAVE BEEN DETECTED!', 'red');
     emit(g, 'detected');
   }
+}
+
+/* =========================================================
+   AI CAPTAIN (demo) AND FIRST OFFICER (guide)
+   One planner decides what the boat should be doing. In demo mode the
+   AI captain carries it out with the same commands as the player; in
+   guide mode the first officer turns it into one instruction at a time.
+   ========================================================= */
+const AI = {
+  tick: 0.25,              // real seconds between decisions
+  attackRange: 3300,       // start the attack inside this range
+  attackExit: 4300,        // and give it up beyond this one
+  fireRange: 2400,
+  surfaceClear: 700,       // surface run only with every escort further than its lookouts' range plus this
+  evadeRange: 3500,        // an escort with contact closer than this sends us deep
+  calm: 120,               // game seconds without threats before coming back up
+};
+const AI_MODES = ['off', 'demo', 'guide'];
+
+function aiInit(mode) {
+  return {
+    mode: AI_MODES.includes(mode) ? mode : 'off', used: mode === 'demo', guided: mode === 'guide',
+    t: 0, plan: null, step: null, done: null, doneT: -1e9,
+    lastThreatT: -1e9, lastShotT: -1e9, lastLockT: -1e9, attacking: false, recharging: false,
+    dodgeDepth: 0, dodgeT: -1e9, dodgeCourse: 0, targetId: 0, ducking: false,
+  };
+}
+
+function setAiMode(g, mode) {
+  const ai = g.ai;
+  if (!AI_MODES.includes(mode) || ai.mode === mode) return;
+  ai.mode = mode;
+  ai.t = 0;
+  ai.step = null;
+  ai.done = null;
+  if (mode === 'demo') { ai.used = true; say(g, 'THE AI CAPTAIN HAS THE CONN · K TO TAKE COMMAND', 'blue'); }
+  else if (mode === 'guide') { ai.guided = true; say(g, 'FIRST OFFICER: I WILL TALK YOU THROUGH IT, HERR KALEUN', 'blue'); }
+  else {
+    ai.plan = null;
+    g.player.helmOrder = null;
+    say(g, 'YOU HAVE THE CONN', 'blue');
+  }
+}
+
+function aiThreats(g) {
+  const p = g.player;
+  let escort = null, ed = 1e9, hunting = null, hd = 1e9;
+  for (const s of g.ships) {
+    if (s.role !== 'escort' || s.sinking) continue;
+    const d = dist2d(p.x, p.y, s.x, s.y);
+    if (d < ed) { ed = d; escort = s; }
+    if ((s.ai.hasContact || s.ai.state === 'attack') && d < hd) { hd = d; hunting = s; }
+  }
+  const charge = g.charges.find(c => !c.aerial && dist2d(p.x, p.y, c.x, c.y) < 600);
+  const plane = g.planes.find(pl => pl.state !== 'leave' && dist2d(p.x, p.y, pl.x, pl.y) < (pl.state === 'attack' ? 9000 : 6000));
+  return { escort, ed, hunting, hd, charge, plane, torpedo: g.warn.torpedo };
+}
+
+const inFlightAt = (g, s) => g.torpedoes.filter(t => t.owner === 'player' && t.targetId === s.id).length;
+
+function aiTarget(g) {
+  const p = g.player, type = g.mission.type;
+  if (type === 'hunters' || g.patrolState !== 'active') return null;
+  const role = type === 'duel' ? 'sub' : 'merchant';
+  const cands = g.ships.filter(s => s.role === role && !s.sinking);
+  if (!cands.length) return null;
+  const covered = s => inFlightAt(g, s) >= s.hp + 1;   // one spare torpedo in every spread
+  if (p.lock) {
+    const l = cands.find(s => s.id === p.lock.id);
+    if (l && !covered(l)) return l;
+  }
+  // Stay with the current target unless another one is much better placed.
+  const cur = cands.find(s => s.id === g.ai.targetId && !covered(s));
+  let best = null, bestV = 1e12;
+  for (const s of cands) {
+    if (covered(s)) continue;
+    let v = dist2d(p.x, p.y, s.x, s.y);
+    if (s.hp < s.maxHp) v -= 1500;              // finish off the damaged ones
+    if (s.kind === 'tanker') v -= 400;
+    if (goingAway(p, s)) v += 4000;            // already past us: poor shot
+    if (s === cur) v *= 0.6;
+    if (v < bestV) { bestV = v; best = s; }
+  }
+  best = best || cands[0];
+  g.ai.targetId = best.id;
+  return best;
+}
+
+// Angle on the bow of ship s as seen from the boat (0 = bows-on, 180 = stern-on).
+const aobOf = (p, s) => angleDiff(bearingTo(p.x, p.y, s.x, s.y) + 180, s.heading);
+const goingAway = (p, s) => s.speed > 1 && Math.abs(aobOf(p, s)) > 135;
+
+const nearestStep = d => DEPTH_STEPS.reduce((a, b) => (Math.abs(b - d) < Math.abs(a - d) ? b : a), 0);
+// Of two courses, the one closer to the present heading.
+const closerCourse = (h, a, b) => (Math.abs(angleDiff(a, h)) <= Math.abs(angleDiff(b, h)) ? wrap360(a) : wrap360(b));
+
+function aiPlan(g) {
+  const plan = aiPlanCore(g), th = g.ai.threats;
+  // An aircraft about: whatever else we do, stay below its charges (never surface, no periscope).
+  if (th && th.plane && plan.phase !== 'air' && plan.depth < CRASH_DIVE_DEPTH) {
+    Object.assign(plan, { depth: CRASH_DIVE_DEPTH, scopeUp: false, fire: false, lock: false });
+    plan.note = 'AIRCRAFT ABOUT · STAYING AT 60 M · ' + plan.note;
+  }
+  return plan;
+}
+
+function aiPlanCore(g) {
+  const p = g.player, ai = g.ai, th = aiThreats(g);
+  ai.threats = th;
+  const plan = {
+    phase: 'patrol', note: '', heading: null, telegraph: 3, depth: PERISCOPE_DEPTH, silent: false,
+    scopeUp: true, scope: null, zoom: 0, crash: false, lock: false, tube: null, fire: false, target: null, wait: '',
+  };
+  if (!p.alive) return plan;
+  if ((th.hunting && th.hd < AI.evadeRange) || th.charge) ai.lastThreatT = g.time;
+
+  // 1. Aircraft: get below their shallow charges.
+  if (th.plane && p.depth < 45) {
+    Object.assign(plan, { phase: 'air', crash: p.depth < 25, depth: CRASH_DIVE_DEPTH, telegraph: TELEGRAPH_FULL, scopeUp: false,
+      note: 'AIRCRAFT! CRASH DIVE: THEIR CHARGES ARE SET SHALLOW AND CANNOT REACH 60 M' });
+    return plan;
+  }
+
+  // 2. Torpedoes coming: they run shallow.
+  if (th.torpedo && p.depth < ENEMY_TORPEDO.hitDepth + 10) {
+    Object.assign(plan, { phase: 'torpedo', depth: 40, telegraph: TELEGRAPH_FULL, scopeUp: false,
+      note: `TORPEDOES INBOUND! GO BELOW ${ENEMY_TORPEDO.hitDepth} M: THEY RUN SHALLOW` });
+    return plan;
+  }
+  // 3. Escorts on us, depth charges, or the hunters mission: go deep, slow and quiet.
+  const hunters = g.mission.type === 'hunters' && g.patrolState === 'active';
+  if (hunters || th.charge || g.time - ai.lastThreatT < AI.calm) {
+    const deep = hunters ? 150 : 120;
+    Object.assign(plan, { phase: 'evade', depth: deep, telegraph: 4, silent: true, scopeUp: false });
+    const s = th.hunting || th.escort;
+    if (s) {
+      const away = bearingTo(s.x, s.y, p.x, p.y);
+      plan.heading = g.time - ai.dodgeT < 240 ? ai.dodgeCourse : closerCourse(p.heading, away + 60, away - 60);
+    }
+    if (th.charge && g.time - ai.dodgeT > 70) {
+      // A pattern is coming down: sprint out sideways from under the escort's track and change depth.
+      ai.dodgeT = g.time;
+      ai.dodgeDepth = p.depth > 135 ? 100 : 180;
+      const esc = th.hunting || th.escort;
+      if (esc) {
+        const h = esc.heading * DEG, lat = (p.x - esc.x) * Math.cos(h) - (p.y - esc.y) * Math.sin(h);
+        ai.dodgeCourse = wrap360(esc.heading + (lat >= 0 ? 90 : -90));
+      } else ai.dodgeCourse = p.heading;
+    }
+    if (g.time - ai.dodgeT < 55) {
+      // Keep running while the escort is busy with its run-out: its sonar loses us beyond ~800 m.
+      Object.assign(plan, { depth: ai.dodgeDepth, telegraph: TELEGRAPH_FULL, silent: false, heading: ai.dodgeCourse,
+        note: th.charge ? 'DEPTH CHARGES! FULL SPEED OUT FROM UNDER THEIR TRACK AND CHANGE DEPTH' : 'SPRINTING WHILE THE CHURNED WATER COVERS OUR NOISE' });
+    } else if (hunters) {
+      const t = Math.ceil(g.mission.timer / TIME_SCALE);
+      plan.note = `HUNTERS ABOVE · STAY BELOW THE LAYER, SLOW AND SILENT FOR ${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+    } else {
+      plan.note = th.hunting ? 'ESCORT HAS CONTACT · DEEP BELOW THE LAYER, SLOW AND SILENT' : 'WAITING FOR THE ESCORTS TO LOSE INTEREST';
+    }
+    return plan;
+  }
+
+  // 4. Battery and air: recharge on the surface when nobody is near.
+  const ra0 = g.area ? dist2d(p.x, p.y, g.area.x, g.area.y) : 1e9;
+  const nearMines = g.mines.length && ra0 > MINE.rings[0] - 450 && ra0 < MINE.rings[1] + 500;
+  const clear = 5000 * g.cond.vis + AI.surfaceClear;
+  // Air nearly gone: surface even with escorts about (unless they already have us), or the crew suffocates.
+  const safe = !nearMines && !g.detected && (th.ed > clear || p.air < 12);
+  if (ai.recharging) { if ((p.battery > 75 && p.air > 95) || !safe) ai.recharging = false; }
+  else if ((p.battery < 25 || p.air < 25) && safe) ai.recharging = true;
+
+  // 5. The target.
+  const tgt = aiTarget(g);
+  if (!tgt) {
+    plan.phase = 'standby';
+    plan.note = g.patrolState === 'active' ? 'SEARCHING' : 'PATROL COMPLETE · STANDING BY FOR NEW ORDERS';
+    const c = g.convoy || g.area;
+    if (c && g.patrolState === 'active') plan.heading = bearingTo(p.x, p.y, c.x, c.y);
+    plan.telegraph = 4;
+    if (ai.recharging) Object.assign(plan, { depth: 0, note: 'SURFACED TO RECHARGE BATTERY AND AIR' });
+    return plan;
+  }
+  plan.target = tgt.id;
+  const d = dist2d(p.x, p.y, tgt.x, tgt.y);
+  const brg = bearingTo(p.x, p.y, tgt.x, tgt.y);
+  const visible = d < visualRange(g) && (tgt.role !== 'sub' || tgt.depth <= PERISCOPE_MAX - 2);
+  ai.attacking = ai.attacking ? d < AI.attackExit : d < AI.attackRange;
+  const ra = g.area ? dist2d(p.x, p.y, g.area.x, g.area.y) : 1e9;
+  const inMines = g.mines.length && ra > MINE.rings[0] - 450 && ra < MINE.rings[1] + 500;
+
+  if (!ai.attacking) {
+    plan.phase = 'approach';
+    if (tgt.speed > 1) {
+      // Head for a point ahead of the target and off its track, on our side.
+      const c = tgt.heading * DEG, v = tgt.speed * KN;
+      const rx = p.x - tgt.x, ry = p.y - tgt.y;
+      const side = rx * Math.cos(c) - ry * Math.sin(c) >= 0 ? 1 : -1;
+      const along = clamp(d * 0.6, 1200, 4000), off = 1900 * side;     // well off the track, clear of the screen
+      const axp = tgt.x + Math.sin(c) * along + Math.cos(c) * off, ayp = tgt.y + Math.cos(c) * along - Math.sin(c) * off;
+      const own = (p.depth < SURFACED_DEPTH ? SUB.maxSurface : SUB.maxSubmerged) * 0.8 * KN;
+      const sol = interceptCourse(p.x, p.y, axp, ayp, Math.sin(c) * v, Math.cos(c) * v, own);
+      plan.heading = sol ? sol.course : bearingTo(p.x, p.y, axp, ayp);
+    } else plan.heading = brg;
+    const surfaceRun = th.ed > clear && !g.detected && d > 6000 && tgt.role !== 'sub' && !(g.mines.length && ra0 < MINE.rings[1] + 1500);
+    if (surfaceRun || ai.recharging) {
+      Object.assign(plan, { depth: 0, telegraph: TELEGRAPH_FULL,
+        note: ai.recharging ? 'SURFACED TO RECHARGE · STILL CLOSING THE TARGET' : `SURFACE RUN ON THE DIESELS TO GET AHEAD OF THE TARGET · ${(d / 1000).toFixed(1)} KM` });
+    } else {
+      Object.assign(plan, { depth: PERISCOPE_DEPTH, telegraph: p.battery > 60 && d > 5500 ? TELEGRAPH_FULL : 4,
+        note: `CLOSING SUBMERGED AT PERISCOPE DEPTH · TARGET ${(d / 1000).toFixed(1)} KM` });
+    }
+    if (inMines) Object.assign(plan, { depth: CRASH_DIVE_DEPTH, telegraph: 4, scopeUp: false, note: 'PASSING UNDER THE MINEFIELD AT 60 M' });
+    plan.scope = visible ? brg : plan.heading;
+    return plan;
+  }
+
+  // Attack: periscope depth, slow and quiet.
+  Object.assign(plan, { phase: 'attack', depth: PERISCOPE_DEPTH, telegraph: 3, silent: true, scope: brg });
+  if (inMines) Object.assign(plan, { depth: CRASH_DIVE_DEPTH, scopeUp: false, heading: brg, telegraph: 4, note: 'PASSING UNDER THE MINEFIELD AT 60 M' });
+  else if (!visible) {
+    plan.heading = brg;
+    plan.note = tgt.role === 'sub' ? 'SUBMARINE DEEP · HOLDING AT PERISCOPE DEPTH UNTIL IT COMES UP' : 'WAITING FOR THE TARGET TO SHOW IN THE PERISCOPE';
+  } else if (!p.lock || p.lock.id !== tgt.id) {
+    plan.lock = scopeAvailable(g) && Math.abs(angleDiff(viewHeading(g), brg)) < 1.5;
+    plan.note = `TARGET IN SIGHT: ${tgt.name.toUpperCase()} · LOCK IT FOR A FIRING SOLUTION`;
+  } else {
+    const sol = firingSolution(g);
+    const flying = inFlightAt(g, tgt);
+    if (!sol) {
+      plan.heading = brg;
+      plan.note = 'NO SOLUTION · CLOSING IN';
+      plan.telegraph = 4;
+    } else if (flying >= tgt.hp + 1) {
+      plan.note = `TORPEDOES RUNNING · ABOUT ${Math.max(0, Math.round(sol.time / TIME_SCALE))} S TO IMPACT`;
+    } else {
+      const rel = angleDiff(sol.course, p.heading);
+      const tubes = p.tubes;
+      const bow = [0, 1, 2, 3].find(i => tubes[i].state === 'ready');
+      let tube = null;
+      if (Math.abs(rel) <= 85 && bow !== undefined) tube = bow;
+      else if (Math.abs(rel) >= 95 && tubes[4].state === 'ready') tube = 4;
+      if (tube === null) {
+        if (bow === undefined && tubes[4].state !== 'ready') {
+          const t = Math.min(...tubes.filter(x => x.state === 'loading').map(x => x.t), 1e9);
+          plan.note = t < 1e9 ? `RELOADING · NEXT TUBE IN ${Math.ceil(t / TIME_SCALE)} S` : 'NO TORPEDOES LEFT';
+        } else {
+          plan.heading = sol.course;
+          plan.note = 'TURNING TO BRING THE TUBES TO BEAR';
+        }
+      } else {
+        // Fan the spread over about a ship's length to cover the errors in speed and course.
+        const fan = clamp((tgt.length * 0.55 / Math.max(sol.range, 300)) / DEG, 0.6, 3);
+        const spread = [0, fan, -fan][flying] || 0;
+        const aim = wrap360(sol.course + spread);
+        plan.tube = tube;
+        plan.scope = aim;
+        const fireRange = th.ed < 2500 ? AI.fireRange + 800 : AI.fireRange;    // shoot early with an escort close
+        if (sol.range > fireRange) {
+          plan.heading = sol.course;
+          plan.telegraph = 4;
+          plan.note = `CLOSING TO FIRING RANGE · ${(sol.range / 1000).toFixed(1)} KM`;
+        } else if (Math.abs(aobOf(p, tgt)) < 40 || Math.abs(aobOf(p, tgt)) > 145) {
+          // Bows-on or going away the target is narrow, and a zigzag spoils a long run: wait for a broad aspect.
+          plan.note = `WAITING FOR A BROADER ANGLE ON THE BOW · AOB ${Math.round(Math.abs(aobOf(p, tgt)))}°`;
+        } else if (sol.stale) {
+          plan.scope = brg;
+          plan.note = 'OBSERVING THE TARGET AGAIN';
+        } else {
+          const aimed = g.diff.autoSolution || Math.abs(angleDiff(viewHeading(g), aim)) < 0.8;
+          plan.fire = aimed && p.selectedTube === tube && scopeAvailable(g);
+          plan.note = `ON THE LEAD · TUBE ${tube + 1} · GYRO ${brg3(aim)}° · RANGE ${fmtKm(sol.range)}`;
+        }
+      }
+    }
+  }
+  // An escort coming close would find us with its ASDIC: slip under the layer until it has passed.
+  ai.ducking = ai.ducking ? th.ed < 1700 : th.ed < 1550;   // their ASDIC builds contact inside ~1.4 km
+  if ((plan.phase === 'attack' || plan.phase === 'approach') && ai.ducking && !plan.fire && plan.depth > 0) {
+    Object.assign(plan, { depth: 100, silent: true, telegraph: 3, scopeUp: false, lock: false,
+      note: `ESCORT CLOSING (${Math.round(th.ed)} M) · UNDER THE LAYER UNTIL IT HAS PASSED` });
+  }
+  if (ai.recharging && !g.detected) Object.assign(plan, { depth: 0, note: 'SURFACED TO RECHARGE BATTERY AND AIR' });
+  return plan;
+}
+
+const fmtKm = m => `${(m / 1000).toFixed(1)} KM`;
+
+// AI captain: carry the plan out with the player's own commands.
+function aiApply(g, plan) {
+  const p = g.player, ai = g.ai;
+  if (plan.crash && !p.crashDive && p.depth < CRASH_DIVE_DEPTH - 5) command(g, 'crashDive');
+  if (!p.crashDive) {
+    const want = nearestStep(plan.depth);
+    for (let i = 0; i < 16 && Math.abs(p.orderedDepth - want) > 0.5; i++) command(g, want < p.orderedDepth ? 'depthUp' : 'depthDown');
+    for (let i = 0; i < 8 && p.telegraph !== plan.telegraph; i++) command(g, plan.telegraph > p.telegraph ? 'engineUp' : 'engineDown');
+    if (p.silent !== plan.silent) command(g, 'silent');
+  }
+  if (p.periscopeUp !== plan.scopeUp && !(plan.scopeUp && p.crashDive)) command(g, 'periscope');
+  p.helmOrder = plan.heading !== null ? wrap360(plan.heading) : (p.helmOrder !== null ? p.helmOrder : wrap360(p.heading));
+  p.scopeTarget = plan.scope !== null ? wrap360(plan.scope) : wrap360(p.heading);
+  if (p.zoom !== plan.zoom) command(g, plan.zoom ? 'zoomIn' : 'zoomOut');
+  if (plan.tube !== null && p.selectedTube !== plan.tube) command(g, 'tube', plan.tube);
+  if (plan.lock && g.realTime - ai.lastLockT > 1) { ai.lastLockT = g.realTime; command(g, 'lock'); }
+  if (plan.fire && g.realTime - ai.lastShotT > 2.5) {
+    if (fireTorpedo(g)) ai.lastShotT = g.realTime;
+  }
+}
+
+// First officer: the single most useful next instruction, with the keys for it.
+function guideStep(g, plan) {
+  const p = g.player;
+  const why = plan.note;
+  if (plan.crash && !p.crashDive && p.depth < CRASH_DIVE_DEPTH - 5) {
+    return { id: 'crash', why, text: 'CRASH DIVE!', keys: 'PRESS C', check: () => p.crashDive || p.depth >= CRASH_DIVE_DEPTH - 5 };
+  }
+  const want = nearestStep(plan.depth);
+  if (!p.crashDive && Math.abs(p.orderedDepth - want) > 0.5) {
+    const up = want < p.orderedDepth;
+    const n = DEPTH_STEPS.filter(d => (up ? d < p.orderedDepth - 0.5 && d >= want - 0.5 : d > p.orderedDepth + 0.5 && d <= want + 0.5)).length;
+    return { id: 'depth' + want, why, text: want === 0 ? 'SURFACE' : want === PERISCOPE_DEPTH ? 'COME TO PERISCOPE DEPTH (13 M)' : `ORDER DEPTH ${want} M`,
+      keys: `PRESS ${up ? 'R' : 'F'}${n > 1 ? ' ×' + n : ''}`, check: () => Math.abs(p.orderedDepth - want) < 0.5 };
+  }
+  if (plan.scopeUp && !p.periscopeUp && p.depth <= PERISCOPE_MAX + 4) {
+    return { id: 'scopeUp', why, text: 'RAISE THE PERISCOPE', keys: 'PRESS P', check: () => p.periscopeUp };
+  }
+  if (plan.silent !== p.silent && !p.crashDive) {
+    return { id: 'silent' + plan.silent, why, text: plan.silent ? 'RIG FOR SILENT RUNNING' : 'CANCEL SILENT RUNNING', keys: 'PRESS X', check: () => p.silent === plan.silent };
+  }
+  if (!p.crashDive && Math.abs(p.telegraph - plan.telegraph) > (plan.telegraph >= TELEGRAPH_FULL ? 1 : 0)) {
+    const n = Math.abs(plan.telegraph - p.telegraph), t = plan.telegraph;
+    return { id: 'eng' + t, why, text: `ENGINES ${TELEGRAPH[t].name}`, keys: `PRESS ${t > p.telegraph ? 'W' : 'S'}${n > 1 ? ' ×' + n : ''}`,
+      check: () => Math.abs(p.telegraph - t) <= (t >= TELEGRAPH_FULL ? 1 : 0) };
+  }
+  if (plan.heading !== null) {
+    const hd = wrap360(plan.heading), err = angleDiff(hd, p.heading);
+    const helmOk = p.helmOrder !== null && Math.abs(angleDiff(p.helmOrder, hd)) < 8;
+    if (Math.abs(err) > 12 && !helmOk) {
+      return { id: 'helm' + Math.round(hd / 10), why, text: `COME TO COURSE ${brg3(hd)}°`,
+        keys: `HOLD ${err < 0 ? 'A (PORT)' : 'D (STARBOARD)'} · OR SCOPE ON ${brg3(hd)}° AND V`,
+        check: () => Math.abs(angleDiff(hd, p.heading)) <= 12 || (p.helmOrder !== null && Math.abs(angleDiff(p.helmOrder, hd)) < 8) };
+    }
+  }
+  if (plan.scopeUp && plan.scope !== null && scopeAvailable(g)) {
+    const tight = plan.lock || plan.tube !== null;
+    const err = angleDiff(plan.scope, viewHeading(g)), tol = tight ? 0.8 : 5;
+    if (Math.abs(err) > tol) {
+      const sc = wrap360(plan.scope);
+      return { id: 'scope' + (tight ? 't' : Math.round(sc / 10)), why, text: plan.tube !== null ? `TRAIN THE PERISCOPE ON THE LEAD: ${brg3(sc)}°` : `TRAIN THE PERISCOPE TO ${brg3(sc)}°`,
+        keys: `HOLD ${err < 0 ? '←' : '→'}${Math.abs(err) > 25 ? ' WITH SHIFT' : ''}`, check: () => Math.abs(angleDiff(sc, viewHeading(g))) <= tol };
+    }
+  }
+  if (plan.tube !== null && p.selectedTube !== plan.tube) {
+    const t = plan.tube;
+    return { id: 'tube' + t, why, text: `SELECT TUBE ${t + 1}${t === 4 ? ' (STERN)' : ''}`, keys: `PRESS ${t + 1}`, check: () => p.selectedTube === t };
+  }
+  if (plan.lock) {
+    const id = plan.target;
+    return { id: 'lock', why, text: 'LOCK THE TARGET IN THE CROSSHAIR', keys: 'PRESS T', check: () => p.lock && p.lock.id === id };
+  }
+  if (plan.fire) {
+    const n = g.stats.fired;
+    return { id: 'fire', why, text: 'FIRE!', keys: 'PRESS SPACE', check: () => g.stats.fired > n };
+  }
+  return { id: 'wait', why, text: plan.phase === 'attack' ? 'STEADY · WATCH THE TARGET' : 'STEADY AS SHE GOES', keys: '', check: () => false };
+}
+
+function updateAI(g, dt) {
+  const ai = g.ai;
+  if (ai.mode === 'off' || g.state !== 'playing') return;
+  ai.t -= dt;
+  if (ai.t > 0) return;
+  ai.t = AI.tick;
+  const plan = aiPlan(g);
+  ai.plan = plan;
+  if (ai.mode === 'demo') {
+    aiApply(g, plan);
+    return;
+  }
+  const st = guideStep(g, plan);
+  if (ai.step && ai.step.id !== st.id && ai.step.id !== 'wait' && ai.step.check()) {
+    ai.done = ai.step.text;
+    ai.doneT = g.realTime;
+  }
+  ai.step = st;
 }
 
 /* =========================================================
@@ -1944,8 +2642,20 @@ let overlay = null;                                 // null | 'help' | 'stats' |
 let titleDifficulty = 'normal';
 let effectsOn = true;
 let effectsChosen = false;                          // set once the player toggles G
+const UI_KEY = 'uboot-zone.uiScale';
+let uiScale = (() => {
+  try { const v = Number(window.localStorage.getItem(UI_KEY)); return v >= 0.6 && v <= 2.5 ? v : 1; } catch (e) { return 1; }
+})();
+let uiToast = 0;                                    // real time the text size was last changed
+function setUiScale(v) {
+  uiScale = Math.round(clamp(v, 0.6, 2.5) * 10) / 10;
+  try { window.localStorage.setItem(UI_KEY, String(uiScale)); } catch (e) { /* storage unavailable */ }
+  uiToast = performance.now();
+  resize();
+}
 const perf = { ema: 1 / 60, t: 0 };
 let game = null;
+let briefingT = 0;                                  // when the current orders were shown (demo accepts them by itself)
 let lastFrame = 0;
 let titleTime = 0;
 let scanPattern = null;
@@ -1965,12 +2675,13 @@ function resize() {
   canvas.style.height = H + 'px';
   glow.width = Math.max(1, Math.round(W / 4));        // bloom is computed at quarter resolution
   glow.height = Math.max(1, Math.round(H / 4));
-  FS = Math.round(clamp(H / 64, 10, 17));
+  // Text and panels grow with the screen (a 4K monitor gets 4K-sized text); +/- adjust on top of that.
+  FS = Math.round(clamp(Math.min(H / 56, W / 92) * uiScale, 10, 90));
   LW = Math.max(1, H / 720);
   const m = Math.round(Math.max(6, H * 0.008));
-  const cmdH = Math.round(clamp(H * 0.03, 16, 28));
-  const rw = Math.round(clamp(W * 0.22, 240, 440));
-  const bh = Math.round(clamp(H * 0.17, 120, 200));
+  const cmdH = Math.round(Math.max(16, FS * 1.7));
+  const rw = Math.round(clamp(Math.max(W * 0.22, FS * 18), 240, W * 0.34));
+  const bh = Math.round(clamp(Math.max(H * 0.17, FS * 8.5), 120, H * 0.3));
   const view = { x: m, y: m, w: W - rw - 3 * m, h: H - bh - cmdH - 4 * m };
   const bottom = { x: m, y: view.y + view.h + m, w: view.w, h: bh };
   const right = { x: view.x + view.w + m, y: m, w: rw, h: bottom.y + bh - m };
@@ -2091,6 +2802,9 @@ function seg3(c, cam, ax, ay, ah, bx, by, bh, seaClip) {
 
 const TV = [0, 0, 0];
 let g_sea = null;                                   // sea state of the game being drawn (ships roll more in a storm)
+let g_now = 0;                                      // animation clock (real seconds) for flames, smoke, propellers
+const WIND = { to: 70, speed: 5 };                  // smoke drifts towards bearing 070
+const SMOKE_COLOR = '#b9c9b0';
 function drawShipModel(c, cam, s, color, alpha, width) {
   const model = MODELS[s.kind];
   const h = s.heading * DEG, sh = Math.sin(h), ch = Math.cos(h);
@@ -2152,16 +2866,138 @@ function drawShipModel(c, cam, s, color, alpha, width) {
     }
     stroke(c, color, LW, alpha * 0.4);
   }
-  if (s.burning && (!k || k.t < k.dur * 0.75)) {             // fire on deck
-    c.beginPath();
-    for (let i = 0; i < 7; i++) {
-      const lx = (Math.random() - 0.5) * s.beam * 0.8, lz = (Math.random() - 0.5) * s.length * 0.5;
-      tv(lx, 6, lz); const ax = TV[0], ay = TV[1], ah = TV[2];
-      tv(lx + (Math.random() - 0.5) * 3, 9 + Math.random() * 14, lz);
-      seg3(c, cam, ax, ay, ah, TV[0], TV[1], TV[2], true);
+  const fx = SHIP_FX[s.kind];
+  if (!fx || s.role === 'plane') return;
+  const now = g_now;
+  const vx = Math.sin(h) * s.speed * KN, vy = Math.cos(h) * s.speed * KN;
+  const wx = Math.sin(WIND.to * DEG) * WIND.speed, wy = Math.cos(WIND.to * DEG) * WIND.speed;
+  const ax = cam.Co, ay = -cam.S;                              // across the line of sight
+  const puffs = [];
+  // Smoke puffs leave the source at its position at emission time, then rise and drift with the wind.
+  const smoke = (bx, by, bh, n, life, rise, r0, r1, a0, seed) => {
+    for (let q = 0; q < n; q++) {
+      const ph = (now / life + q / n + hash3(s.id, seed, q) * 0.07) % 1;
+      const age = ph * life * TIME_SCALE;
+      const curl = Math.sin(now * 0.7 + q * 1.9 + seed) * ph * 6;
+      puffs.push(bx + (wx - vx) * age + ax * curl, by + (wy - vy) * age + ay * curl, bh + 1 + rise * Math.pow(ph, 0.8),
+        r0 + (r1 - r0) * ph, a0 * Math.pow(1 - ph, 1.3) * Math.min(1, ph * 10));
     }
-    stroke(c, Math.random() < 0.5 ? C.orange : C.yellow, LW * 1.2, alpha);
+  };
+  // funnel smoke while steaming
+  if (!k && fx.smoke && s.speed > 1) {
+    for (let i = 0; i < fx.funnels.length; i++) {
+      const f = fx.funnels[i];
+      tv(f[0], f[1], f[2]);
+      smoke(TV[0], TV[1], TV[2], 6, 9, 16, 1.2, 9, 0.22 * fx.smoke, i);
+    }
   }
+  if (s.burning && (!k || k.t < k.dur * 0.9)) {
+    const fireOn = !k || k.t < k.dur * 0.75;
+    const big = (k ? 1.35 : 1) * (s.kind === 'tanker' ? 1.5 : 1) * (s.role === 'merchant' ? 1 : 0.8);
+    const nSrc = s.kind === 'tanker' ? 3 : 2;
+    const outer = [], inner = [];
+    for (let i = 0; i < nSrc; i++) {
+      const lz = (hash3(s.id, i, 7) - 0.5) * s.length * 0.55, lx = (hash3(s.id, i, 8) - 0.5) * s.beam * 0.4;
+      tv(lx, fx.deck, lz);
+      const bx = TV[0], by = TV[1], bh = TV[2];
+      if (bh < -0.5) continue;                                   // gone under
+      smoke(bx, by, bh + 10 * big, 10, 13, 90 * big, 4, 30 * big, 0.75, 10 + i);
+      if (!fireOn) continue;
+      for (let j = 0; j < 3; j++) {                              // flame tongues
+        const ph = hash3(s.id, i, j) * 50;
+        const fl = 0.68 + 0.22 * Math.sin(now * 8 + ph) + 0.12 * Math.sin(now * 21 + ph * 2) + 0.06 * Math.sin(now * 47 + ph);
+        const hh = (11 + 11 * hash3(i, j, s.id)) * fl * big;
+        const w = (4 + 3 * hash3(j, i, 3)) * big;
+        const off = (j - 1) * w * 0.85;
+        const cx0 = bx + ax * off, cy0 = by + ay * off;
+        const sway = Math.sin(now * 3.1 + ph) * hh * 0.12;
+        for (const [arr, kw, kh] of [[outer, 1, 1], [inner, 0.5, 0.62]]) {
+          const ww = w * kw, hgt = hh * kh;
+          const tipX = cx0 + wx * hgt * 0.05 + ax * sway, tipY = cy0 + wy * hgt * 0.05 + ay * sway;
+          const pts = [
+            [cx0 - ax * ww / 2, cy0 - ay * ww / 2, bh],
+            [cx0 - ax * ww * 0.42 + ax * sway * 0.3, cy0 - ay * ww * 0.42 + ay * sway * 0.3, bh + hgt * 0.38],
+            [cx0 - ax * ww * 0.15 + ax * sway * 0.7, cy0 - ay * ww * 0.15 + ay * sway * 0.7, bh + hgt * 0.75],
+            [tipX, tipY, bh + hgt],
+            [cx0 + ax * ww * 0.18 + ax * sway * 0.6, cy0 + ay * ww * 0.18 + ay * sway * 0.6, bh + hgt * 0.68],
+            [cx0 + ax * ww * 0.45 + ax * sway * 0.25, cy0 + ay * ww * 0.45 + ay * sway * 0.25, bh + hgt * 0.32],
+            [cx0 + ax * ww / 2, cy0 + ay * ww / 2, bh],
+          ];
+          for (let q = 0; q < pts.length - 1; q++) arr.push(pts[q], pts[q + 1]);
+        }
+      }
+    }
+    // a sinking tanker leaves burning oil on the water
+    if (k && s.kind === 'tanker' && fireOn) {
+      const R = s.length * 0.25 + k.t * 0.6;
+      for (let i = 0; i < 9; i++) {
+        const a = (i / 9) * TAU + s.id;
+        const px = s.x + Math.sin(a) * R * (0.6 + 0.4 * hash3(i, s.id, 4)), py = s.y + Math.cos(a) * R * (0.6 + 0.4 * hash3(i, s.id, 5));
+        const fl = 0.6 + 0.4 * Math.sin(now * 7 + i * 2.3);
+        const hgt = 4 * fl + 2, ww = 4;
+        outer.push([px - ax * ww, py - ay * ww, 0], [px, py, hgt], [px, py, hgt], [px + ax * ww, py + ay * ww, 0]);
+      }
+    }
+    for (const [arr, col, wd] of [[outer, C.orange, LW * 1.3], [inner, C.yellow, LW * 1.1]]) {
+      if (!arr.length) continue;
+      c.beginPath();
+      for (let q = 0; q < arr.length; q += 2) seg3(c, cam, arr[q][0], arr[q][1], arr[q][2], arr[q + 1][0], arr[q + 1][1], arr[q + 1][2], true);
+      stroke(c, col, wd, alpha);
+    }
+  }
+  // draw the smoke, in three alpha bands to keep the strokes few
+  if (puffs.length) {
+    const night = g_sea && g_sea.time === 'night' ? 0.5 : 1;
+    const bands = [[], [], []];
+    for (let q = 0; q < puffs.length; q += 5) {
+      const a = puffs[q + 4];
+      if (a < 0.02 || !project(cam, puffs[q], puffs[q + 1], puffs[q + 2])) continue;
+      const rr = puffs[q + 3] * cam.F / P.z;
+      if (rr < 0.8) continue;
+      bands[a > 0.3 ? 0 : a > 0.12 ? 1 : 2].push(P.x, P.y, rr);
+    }
+    const bandA = [0.6, 0.34, 0.14];
+    for (let b = 0; b < 3; b++) {
+      const arr = bands[b];
+      if (!arr.length) continue;
+      c.beginPath();
+      for (let q = 0; q < arr.length; q += 3) {
+        // a lumpy vector circle
+        for (let v = 0; v <= 9; v++) {
+          const an = (v / 9) * TAU, rr = arr[q + 2] * (1 + 0.12 * Math.sin(an * 3 + q));
+          const x = arr[q] + Math.cos(an) * rr, y = arr[q + 1] + Math.sin(an) * rr * 0.8;
+          if (v === 0) c.moveTo(x, y); else c.lineTo(x, y);
+        }
+      }
+      stroke(c, SMOKE_COLOR, LW, bandA[b] * alpha * night);
+    }
+  }
+}
+
+// Stylised torpedo, drawn in world space at height h (just under the surface in the periscope).
+function drawTorpedoModel(c, cam, tp, hgt, color, alpha) {
+  const hd = tp.heading * DEG, sh = Math.sin(hd), ch = Math.cos(hd);
+  const m = TORPEDO_MODEL;
+  const w = (x, y, z) => { TV[0] = tp.x + z * sh + x * ch; TV[1] = tp.y + z * ch - x * sh; TV[2] = hgt + y; };
+  c.beginPath();
+  for (let i = 0; i < m.length; i += 6) {
+    w(m[i], m[i + 1], m[i + 2]);
+    const ax = TV[0], ay = TV[1], ah = TV[2];
+    w(m[i + 3], m[i + 4], m[i + 5]);
+    seg3(c, cam, ax, ay, ah, TV[0], TV[1], TV[2], false);
+  }
+  // two contra-rotating propellers
+  for (const [pz, dir] of [[-6.6, 1], [-7.1, -1]]) {
+    const a0 = g_now * 25 * dir;
+    for (let b = 0; b < 4; b++) {
+      const a = a0 + (b / 4) * TAU;
+      w(0, 0, pz);
+      const ax = TV[0], ay = TV[1], ah = TV[2];
+      w(Math.cos(a) * 0.95, Math.sin(a) * 0.95, pz);
+      seg3(c, cam, ax, ay, ah, TV[0], TV[1], TV[2], false);
+    }
+  }
+  stroke(c, color, LW * 1.15, alpha);
 }
 
 /* ---------- sky: sun by day, low sun at dusk, moon and stars at night ---------- */
@@ -2262,6 +3098,7 @@ function drawSea(c, g, r, cam) {
 
   const cond = g.cond;
   g_sea = cond;
+  g_now = g.realTime;
   drawSky(c, cam, t, cond);
 
   // coastline silhouettes on the horizon
@@ -2335,10 +3172,15 @@ function drawSea(c, g, r, cam) {
     c.fillStyle = enemy ? rgba('red', 0.8) : rgba('white', 0.55);
     c.fill();
     if (project(cam, tp.x, tp.y, 0)) {
-      c.beginPath();
-      c.arc(P.x, P.y, clamp(cam.F / P.z * 2, 1, 5), 0, TAU);
-      c.fillStyle = enemy ? C.red : C.white;
-      c.fill();
+      if (P.z < 1500 && cam.F / P.z * 13 > 10) {
+        // close enough to make out the torpedo itself, just under the surface
+        drawTorpedoModel(c, cam, tp, -0.9, enemy ? C.red : C.white, clamp(1.2 - P.z / 1500, 0.35, 0.9));
+      } else {
+        c.beginPath();
+        c.arc(P.x, P.y, clamp(cam.F / P.z * 2, 1, 5), 0, TAU);
+        c.fillStyle = enemy ? C.red : C.white;
+        c.fill();
+      }
     }
   }
 
@@ -2541,15 +3383,11 @@ function drawUnderwater(c, g, r, cam) {
     if (project(cam2, m.x, m.y, -m.depth - 60)) line(c, mx, my + s, P.x, P.y);
     stroke(c, C.orange, LW * 1.3, clamp(1.3 - P.z / 300, 0.2, 1));
   }
-  // enemy torpedoes running shallow overhead
+  // torpedoes running shallow overhead: ours in white, the enemy's in red
   for (const tp of g.torpedoes) {
-    if (tp.owner !== 'enemy' || !project(cam2, tp.x, tp.y, -4)) continue;
-    if (P.z > 500) continue;
-    const s = clamp(cam.F / P.z * 1.2, 3, 50);
-    c.beginPath();
-    line(c, P.x - s, P.y, P.x + s, P.y);
-    line(c, P.x - s, P.y - s * 0.15, P.x - s, P.y + s * 0.15);
-    stroke(c, C.red, LW * 2);
+    if (!project(cam2, tp.x, tp.y, -4)) continue;
+    if (P.z > 600) continue;
+    drawTorpedoModel(c, cam2, tp, -4, tp.owner === 'enemy' ? C.red : C.white, clamp(1.3 - P.z / 600, 0.3, 1));
   }
   // depth charges sinking nearby: a very bad sign
   for (const ch of g.charges) {
@@ -2647,6 +3485,7 @@ function drawPeriscope(c, g, r) {
   }
   if (seeing) drawReticle(c, g, r, cam);
   drawMessages(c, g, r);
+  drawAiCaption(c, g, r);
   c.restore();
 
   // periscope frame
@@ -2863,7 +3702,7 @@ function drawBottom(c, g, r) {
     text(c, `PLANES ${vzText} M/S`, s.x + s.w / 2, y2 - FS * 1.05, p.crashDive ? C.red : rgba(INK, 0.85), FS * 0.72, 'center');
     hbar(c, bx, y2, bw, p.vz, -3, 3, p.vz > 0 ? 'blue' : INK);
   }
-  slotTitle(c, s, 'HELM', `TURN ${p.turnRate >= 0 ? '+' : ''}${p.turnRate.toFixed(1)}°/S`);
+  slotTitle(c, s, 'HELM', p.helmOrder !== null ? `AUTO HELM ${pad3(p.helmOrder)}°` : `TURN ${p.turnRate >= 0 ? '+' : ''}${p.turnRate.toFixed(1)}°/S`, p.helmOrder !== null ? C.blue : undefined);
 
   // power: battery, air, hull
   s = slots[5];
@@ -2900,13 +3739,29 @@ function drawSonar(c, g, cx, cy, R) {
   line(c, cx - R, cy, cx + R, cy);
   line(c, cx, cy - R, cx, cy + R);
   stroke(c, C[INK], LW, 0.2);
-  for (let b = 0; b < 360; b += 10) {
-    const a = (b - 90) * DEG, r0 = b % 30 === 0 ? R * 0.93 : R * 0.965;
-    c.beginPath();
+  c.beginPath();
+  for (let b = 0; b < 360; b += 5) {
+    const a = (b - 90) * DEG, r0 = b % 30 === 0 ? R * 0.92 : b % 10 === 0 ? R * 0.955 : R * 0.975;
     line(c, cx + Math.cos(a) * r0, cy + Math.sin(a) * r0, cx + Math.cos(a) * R, cy + Math.sin(a) * R);
-    stroke(c, C[INK], LW, 0.6);
   }
-  text(c, 'N', cx, cy - R - FS * 0.6, C.red, FS * 0.75, 'center');
+  stroke(c, C[INK], LW, 0.6);
+  // bearing scale round the rim
+  for (let b = 0; b < 360; b += 30) {
+    const a = (b - 90) * DEG, rl = R + FS * 0.75;
+    if (b === 0) text(c, 'N', cx, cy - rl, C.red, FS * 0.8, 'center');
+    else text(c, pad3(b), cx + Math.cos(a) * rl, cy + Math.sin(a) * rl, rgba(INK, 0.8), FS * 0.6, 'center');
+  }
+  // own heading: a white marker outside the rim
+  {
+    const a = (p.heading - 90) * DEG, k0 = R * 1.01, k1 = R * 1.01 + FS * 0.45;
+    c.beginPath();
+    c.moveTo(cx + Math.cos(a) * k0, cy + Math.sin(a) * k0);
+    c.lineTo(cx + Math.cos(a + 0.06) * k1, cy + Math.sin(a + 0.06) * k1);
+    c.lineTo(cx + Math.cos(a - 0.06) * k1, cy + Math.sin(a - 0.06) * k1);
+    c.closePath();
+    c.fillStyle = C.white;
+    c.fill();
+  }
   c.save();
   c.beginPath(); c.arc(cx, cy, R, 0, TAU); c.clip();
   // sweep beam with a fading trail
@@ -2927,6 +3782,15 @@ function drawSonar(c, g, cx, cy, R) {
   c.setLineDash([2, 5]);
   stroke(c, C.yellow, LW, 0.6);
   c.setLineDash([]);
+  // course recommended by the AI captain / first officer
+  if (g.ai.mode !== 'off' && g.ai.plan && g.ai.plan.heading !== null) {
+    const rh = (g.ai.plan.heading - 90) * DEG;
+    c.beginPath();
+    line(c, cx + Math.cos(rh) * R * 0.3, cy + Math.sin(rh) * R * 0.3, cx + Math.cos(rh) * R, cy + Math.sin(rh) * R);
+    c.setLineDash([8, 6]);
+    stroke(c, C.blue, LW * 1.4, 0.8);
+    c.setLineDash([]);
+  }
   // active ping ring
   if (so.ping) {
     c.beginPath();
@@ -2946,6 +3810,20 @@ function drawSonar(c, g, cx, cy, R) {
       c.beginPath();
       line(c, cx + Math.cos(ang) * R * 0.9, cy + Math.sin(ang) * R * 0.9, cx + Math.cos(ang) * R, cy + Math.sin(ang) * R);
       stroke(c, C[col], LW * 3, a);
+      continue;
+    }
+    if (b.type === 'torpedo' && b.heading !== undefined) {
+      // a little torpedo pointing along its course
+      const hd = (b.heading - 90) * DEG, L = Math.max(5, FS * 0.55), dx = Math.cos(hd), dy = Math.sin(hd);
+      c.beginPath();
+      line(c, x - dx * L, y - dy * L, x + dx * L, y + dy * L);
+      line(c, x - dx * L - dy * L * 0.35, y - dy * L + dx * L * 0.35, x - dx * L + dy * L * 0.35, y - dy * L - dx * L * 0.35);
+      const tc = b.own ? 'white' : 'red';
+      stroke(c, C[tc], LW * 2, a);
+      c.beginPath();
+      c.arc(x + dx * L, y + dy * L, Math.max(1.5, LW * 1.4), 0, TAU);
+      c.fillStyle = rgba(tc, a);
+      c.fill();
       continue;
     }
     if (b.type === 'mine') {
@@ -2985,10 +3863,14 @@ function drawRight(c, g, r) {
   let y = r.y + lh * 0.8;
   const pinging = !!g.sonar.ping;
   text(c, `SONAR · ${pinging ? 'ACTIVE PING' : 'PASSIVE'} · ${SONAR_RANGE / 1000} KM`, r.x + r.w / 2, y, pinging ? C.white : C[INK], FS * 0.85, 'center');
-  const sr = Math.min(r.w / 2 - pad * 1.5, r.h * 0.2);
+  const sr = Math.min(r.w / 2 - pad - FS * 1.6, r.h * 0.19);
   y += lh * 0.6;
-  drawSonar(c, g, r.x + r.w / 2, y + sr + FS * 0.6, sr);
-  y += sr * 2 + FS * 1.6;
+  drawSonar(c, g, r.x + r.w / 2, y + sr + FS * 1.5, sr);
+  y += sr * 2 + FS * 3;
+  text(c, `HDG ${pad3(p.heading)}°`, r.x + pad, y, C.white, FS * 0.8);
+  text(c, `SCOPE ${pad3(viewHeading(g))}°`, r.x + r.w - pad, y, C.yellow, FS * 0.8, 'right');
+  if (g.ai.mode !== 'off' && g.ai.plan && g.ai.plan.heading !== null) text(c, `→${pad3(g.ai.plan.heading)}°`, r.x + r.w / 2, y, C.blue, FS * 0.8, 'center');
+  y += lh * 0.8;
 
   // torpedo tubes
   c.beginPath(); line(c, r.x + pad, y, r.x + r.w - pad, y); stroke(c, C[INK], LW, 0.3);
@@ -3109,13 +3991,50 @@ function drawRight(c, g, r) {
   text(c, `${fmtInt(score(g))}`, r.x + r.w - pad, sy, C.yellow, FS, 'right');
 }
 
-const COMMAND_LINE = 'W/S ENGINE · A/D RUDDER · R/F DEPTH · C CRASH DIVE · P SCOPE · ←/→ TRAIN · ↑/↓ POWER · T LOCK · SPACE FIRE · 1-5 TUBE · TAB PING · X SILENT · H HELP · I STATS · ESC PAUSE';
+const COMMAND_LINE = 'W/S ENGINE · A/D RUDDER · R/F DEPTH · C CRASH · P SCOPE · ←/→ TRAIN · ↑/↓ POWER · B SCOPE TO BOW · V STEER TO SCOPE · T LOCK · SPACE FIRE · 1-5 TUBE · TAB PING · X SILENT · K AI CAPTAIN · O GUIDE · H HELP · I STATS · ESC PAUSE';
+const DEMO_LINE = 'THE AI CAPTAIN HAS THE CONN · K: TAKE COMMAND · O: SWITCH TO GUIDANCE · H HELP · I STATS · ESC PAUSE';
 function drawCommandLine(c, r) {
+  const str = game && game.ai.mode === 'demo' ? DEMO_LINE : COMMAND_LINE;
   let size = FS * 0.85;
   c.font = font(size, true);
-  const w = c.measureText(COMMAND_LINE).width;
+  const w = c.measureText(str).width;
   if (w > r.w) size *= r.w / w;
-  text(c, COMMAND_LINE, r.x + r.w / 2, r.y + r.h / 2, rgba(INK, 0.75), size, 'center');
+  text(c, str, r.x + r.w / 2, r.y + r.h / 2, game && game.ai.mode === 'demo' ? C.blue : rgba(INK, 0.75), size, 'center');
+}
+
+// Caption of the AI captain (demo) or of the first officer (guide), under the compass tape.
+function drawAiCaption(c, g, r) {
+  const ai = g.ai;
+  if (ai.mode === 'off' || !ai.plan || !g.player.alive) return;
+  const w = Math.min(r.w * 0.82, FS * 46), x = r.x + (r.w - w) / 2, y = r.y + FS * 5.2;
+  const fs = FS * 0.9, pad = FS * 0.6;
+  const demo = ai.mode === 'demo';
+  const lines = [];
+  if (demo) {
+    lines.push([`AI CAPTAIN · ${ai.plan.phase.toUpperCase()}`, C.blue, fs * 0.8]);
+    for (const l of wrapText(c, ai.plan.note || '', w - pad * 2, fs)) lines.push([l, C.white, fs]);
+    const k = timeFactor(g);
+    if (k > 1) lines.push([`TIME ×${k}`, C.yellow, fs * 0.8]);
+  } else {
+    const st = ai.step;
+    if (!st) return;
+    lines.push(['FIRST OFFICER', C.blue, fs * 0.8]);
+    for (const l of wrapText(c, st.why || '', w - pad * 2, fs * 0.85)) lines.push([l, rgba('white', 0.8), fs * 0.85]);
+    lines.push(['▸ ' + st.text, C.yellow, fs * 1.1]);
+    if (st.keys) lines.push([st.keys, C[INK], fs]);
+    if (ai.done && g.realTime - ai.doneT < 2.5) lines.push(['✓ ' + ai.done, C.green, fs * 0.8]);
+  }
+  const h = lines.reduce((a, l) => a + l[2] * 1.35, 0) + pad * 1.4;
+  c.fillStyle = 'rgba(0,0,0,0.6)';
+  c.fillRect(x, y, w, h);
+  c.beginPath();
+  c.rect(x, y, w, h);
+  stroke(c, C.blue, LW, 0.7);
+  let yy = y + pad * 0.7;
+  for (const [str, col, size] of lines) {
+    text(c, str, x + w / 2, yy + size * 0.65, col, size, 'center');
+    yy += size * 1.35;
+  }
 }
 
 /* ---------- overlays ---------- */
@@ -3139,6 +4058,7 @@ const HELP_KEYS = [
   ['← / →', 'Train the periscope (SHIFT = fast)'],
   ['↑ / ↓', 'Periscope high / low power'],
   ['B', 'Periscope back to the bow'],
+  ['V', 'Steer to the periscope bearing (auto helm)'],
   ['T', 'Lock / release the target'],
   ['SPACE', 'Fire the selected tube'],
   ['1 - 5', 'Select tube (1-4 bow, 5 stern)'],
@@ -3147,6 +4067,9 @@ const HELP_KEYS = [
   ['H / I', 'This help / patrol statistics'],
   ['M / G', 'Sound on-off / CRT glow effects'],
   ['ENTER', 'Accept the orders of a new patrol'],
+  ['K', 'AI captain takes / gives back command (demo)'],
+  ['O', 'First officer guidance on / off'],
+  ['+ / -', 'Text size'],
   ['ESC', 'Pause'],
 ];
 const HELP_TIPS = [
@@ -3161,6 +4084,8 @@ const HELP_TIPS = [
   'Enemy submarine torpedoes run shallow: deeper than 18 m they pass overhead. Ours only hit a submarine at periscope depth or surfaced.',
   'Aircraft spot a surfaced boat from far away and a periscope from close. When the lookouts shout AIRCRAFT, crash dive (C): their charges are set shallow and cannot reach 60 m.',
   'Mines are moored 4-35 m deep: pass deeper, or find the swept channel with a ping. Night and fog hide you, but also hide them.',
+  'V turns the boat onto the periscope bearing and holds that course (AUTO HELM); A or D takes the wheel back. B brings the periscope back to the bow.',
+  'K hands the boat to the AI captain: watch him work and read his reasoning at the top of the periscope. O keeps you in command, with the first officer telling you the next step and the keys for it.',
   'The full manual (MANUAL.md) explains every instrument and rule.',
 ];
 
@@ -3178,15 +4103,15 @@ function wrapText(c, str, maxW, size) {
 }
 
 function drawHelp(c) {
-  const pw = Math.min(W * 0.9, 1250), ph = Math.min(H * 0.88, 760);
+  const pw = Math.min(W * 0.94, FS * 78), ph = Math.min(H * 0.92, FS * 48);
   const r = panel(c, pw, ph);
-  const fs = clamp(Math.min(ph / 34, pw / 70), 9, 17);
+  const fs = Math.min(ph / (HELP_KEYS.length * 1.6 + 8), pw / 72, FS * 1.05);
   text(c, 'U-BOOT ZONE · COMMANDER\'S HANDBOOK', r.x + r.w / 2, r.y + fs * 2, C[INK], fs * 1.4, 'center');
   let y = r.y + fs * 4.5;
   const x0 = r.x + fs * 2;
   for (const [k, d] of HELP_KEYS) {
     text(c, k, x0, y, C.yellow, fs);
-    text(c, d, x0 + fs * 7, y, C[INK], fs);
+    text(c, d, x0 + fs * 8, y, C[INK], fs);
     y += fs * 1.6;
   }
   const x1 = r.x + r.w * 0.5, tw = r.w * 0.47;
@@ -3222,7 +4147,7 @@ function statsLines(g) {
     ['TIME SUBMERGED', `${Math.floor(sub / 60)} H ${String(sub % 60).padStart(2, '0')} MIN (GAME TIME)`],
     ['ACTIVE PINGS', `${st.pings}`],
     ['PATROLS', `${g.patrol} STARTED · ${st.missionsWon} MISSIONS ACCOMPLISHED`],
-    ['DIFFICULTY', g.diff.name],
+    ['DIFFICULTY', g.diff.name + (g.ai.used ? ' · AI CAPTAIN (NOT RECORDED)' : g.ai.guided ? ' · GUIDED' : '')],
   ];
 }
 
@@ -3239,9 +4164,9 @@ function drawScores(c, x, y, fs, highlight) {
 }
 
 function drawStats(c, g, title, extra) {
-  const pw = Math.min(W * 0.86, 1100), ph = Math.min(H * 0.82, 640);
+  const pw = Math.min(W * 0.92, FS * 70), ph = Math.min(H * 0.88, FS * 40);
   const r = panel(c, pw, ph);
-  const fs = clamp(Math.min(ph / 30, pw / 70), 9, 17);
+  const fs = Math.min(ph / 30, pw / 72, FS * 1.05);
   text(c, title, r.x + r.w / 2, r.y + fs * 2, title.startsWith('U-BOOT LOST') ? C.red : C[INK], fs * 1.5, 'center');
   if (extra) text(c, extra, r.x + r.w / 2, r.y + fs * 3.7, C.yellow, fs, 'center');
   let y = r.y + fs * 5.5;
@@ -3251,15 +4176,15 @@ function drawStats(c, g, title, extra) {
     y += fs * 1.6;
   }
   drawScores(c, r.x + fs * 2, y + fs, fs, g.scoreRank);
-  text(c, mode === 'over' ? 'ENTER: NEW PATROL · ESC: TITLE' : 'PRESS I OR ESC TO RETURN', r.x + r.w / 2, r.y + r.h - fs * 1.5, rgba(INK, 0.7), fs, 'center');
+  text(c, mode === 'over' ? 'ENTER: NEW PATROL · K: WATCH THE AI CAPTAIN · O: GUIDED · ESC: TITLE' : 'PRESS I OR ESC TO RETURN', r.x + r.w / 2, r.y + r.h - fs * 1.5, rgba(INK, 0.7), fs, 'center');
 }
 
 function drawBriefing(c, g) {
   const b = g.briefing;
   if (!b) return;
-  const pw = Math.min(W * 0.8, 980), ph = Math.min(H * 0.7, 520);
+  const pw = Math.min(W * 0.86, FS * 58), ph = Math.min(H * 0.8, FS * 34);
   const r = panel(c, pw, ph);
-  const fs = clamp(Math.min(ph / 26, pw / 60), 10, 18);
+  const fs = Math.min(ph / 28, pw / 60, FS * 1.1);
   text(c, 'ORDERS FROM U-BOAT COMMAND', r.x + r.w / 2, r.y + fs * 2, rgba(INK, 0.7), fs * 0.9, 'center');
   text(c, b.title, r.x + r.w / 2, r.y + fs * 3.7, C.yellow, fs * 1.4, 'center');
   let y = r.y + fs * 6;
@@ -3274,7 +4199,13 @@ function drawBriefing(c, g) {
   block('INTELLIGENCE', b.intel);
   block('CONDITIONS', `${b.conditions}. ${b.air}`, rgba(INK, 0.85));
   const blink = Math.sin(performance.now() / 250) > -0.3;
-  if (blink) text(c, 'ENTER: ACCEPT ORDERS', r.x + r.w / 2, r.y + r.h - fs * 1.6, C[INK], fs, 'center');
+  if (g.ai.mode === 'demo') {
+    const left = Math.max(0, Math.ceil(6 - (performance.now() - briefingT) / 1000));
+    text(c, `THE AI CAPTAIN ACCEPTS THE ORDERS IN ${left} S · ENTER: TAKE COMMAND YOURSELF`, r.x + r.w / 2, r.y + r.h - fs * 1.6, C.blue, fs * 0.9, 'center');
+    return;
+  }
+  if (blink) text(c, 'ENTER: ACCEPT ORDERS AND TAKE COMMAND', r.x + r.w / 2, r.y + r.h - fs * 3, C[INK], fs, 'center');
+  text(c, 'K: LET THE AI CAPTAIN CARRY THEM OUT (DEMO)  ·  O: COMMAND WITH THE FIRST OFFICER\'S GUIDANCE', r.x + r.w / 2, r.y + r.h - fs * 1.5, C.blue, fs * 0.8, 'center');
 }
 
 function drawPause(c) {
@@ -3301,6 +4232,8 @@ function drawTitle(c, t) {
     }
   }
   stroke(c, C.green, LW, 0.6);
+  g_sea = null;
+  g_now = t;
   drawShipModel(c, cam, TITLE_SHIP, C.green, 1, LW * 1.5);
   const ts = clamp(W / 12, 32, 120);
   text(c, 'U-BOOT ZONE', cx, H * 0.17, C.green, ts, 'center');
@@ -3320,7 +4253,8 @@ function drawTitle(c, t) {
   });
   const blink = Math.sin(t * 4) > -0.3;
   if (blink) text(c, 'PRESS ENTER TO SAIL', cx, y + FS * 5.2, C.green, FS * 1.5, 'center');
-  text(c, 'H: HELP  ·  M: SOUND  ·  G: CRT EFFECTS', cx, y + FS * 7.4, rgba('green', 0.6), FS, 'center');
+  text(c, 'K: WATCH THE AI CAPTAIN (DEMO)  ·  O: SAIL WITH THE FIRST OFFICER\'S GUIDANCE', cx, y + FS * 7.2, C.blue, FS * 0.95, 'center');
+  text(c, `H: HELP  ·  M: SOUND  ·  G: CRT EFFECTS  ·  +/-: TEXT SIZE (${Math.round(uiScale * 100)}%)`, cx, y + FS * 8.9, rgba('green', 0.6), FS, 'center');
 }
 
 /* ---------- screen effects ---------- */
@@ -3405,7 +4339,7 @@ function handleEvents(g) {
       case 'chargesAway': break;
       case 'patrol':
         if (g.patrol > 1) Sound.ping(0.25, 660);
-        if (mode === 'play') overlay = 'briefing';
+        if (mode === 'play') { overlay = 'briefing'; briefingT = performance.now(); }
         break;
       case 'enemyLaunch': Sound.launch(clamp(1 - e.dist / 5000, 0.15, 0.6)); Sound.alarm(); break;
       case 'torpedoHit':
@@ -3703,8 +4637,9 @@ function loadScores() {
 }
 
 function saveScore(g) {
+  if (g.ai.used) { g.scoreRank = -1; return; }      // the AI captain's patrols do not count
   const list = loadScores();
-  const entry = { score: score(g), grt: g.stats.tonnage, patrol: g.patrol, diff: g.diff.name, date: new Date().toISOString().slice(0, 10), id: Date.now() };
+  const entry = { score: score(g), grt: g.stats.tonnage, patrol: g.patrol, diff: g.diff.name + (g.ai.guided ? ' GUIDED' : ''), date: new Date().toISOString().slice(0, 10), id: Date.now() };
   list.push(entry);
   const val = e => (e.score !== undefined ? e.score : e.grt);
   list.sort((a, b) => val(b) - val(a));
@@ -3717,11 +4652,12 @@ function saveScore(g) {
 const HOLD_KEYS = { KeyA: 'rudderLeft', KeyD: 'rudderRight', ArrowLeft: 'scopeLeft', ArrowRight: 'scopeRight', ShiftLeft: 'scopeFast', ShiftRight: 'scopeFast' };
 const GAME_KEYS = new Set(['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
-function newGame() {
-  game = createGame({ difficulty: titleDifficulty });
+function newGame(ai) {
+  game = createGame({ difficulty: titleDifficulty, ai: ai || 'off' });
   mode = 'play';
   overlay = null;
   FX.shakes = [];
+  briefingT = performance.now();
 }
 
 function onKeyDown(e) {
@@ -3732,6 +4668,8 @@ function onKeyDown(e) {
   const code = e.code;
   if (code === 'KeyM') { Sound.toggle(); return; }
   if (code === 'KeyG') { effectsOn = !effectsOn; effectsChosen = true; return; }
+  if (code === 'Equal' || code === 'NumpadAdd') { setUiScale(uiScale + 0.1); return; }
+  if (code === 'Minus' || code === 'NumpadSubtract') { setUiScale(uiScale - 0.1); return; }
 
   if (mode === 'title') {
     if (overlay === 'help') { if (code === 'KeyH' || code === 'Escape') overlay = null; return; }
@@ -3740,17 +4678,24 @@ function onKeyDown(e) {
     else if (code === 'Digit3') titleDifficulty = 'hard';
     else if (code === 'KeyH') overlay = 'help';
     else if (code === 'Enter' || code === 'Space') newGame();
+    else if (code === 'KeyK') newGame('demo');
+    else if (code === 'KeyO') newGame('guide');
     return;
   }
   if (mode === 'over') {
     if (code === 'Enter') newGame();
+    else if (code === 'KeyK') newGame('demo');
+    else if (code === 'KeyO') newGame('guide');
     else if (code === 'Escape') { mode = 'title'; game = null; overlay = null; }
     return;
   }
   // playing
   if (overlay) {
     if (overlay === 'briefing') {
-      if (code === 'Enter' || code === 'Escape') overlay = null;
+      // ENTER: command yourself · K: the AI captain carries out these orders · O: with the first officer's guidance
+      if (code === 'Enter' || code === 'Escape') { if (game.ai.mode === 'demo' && code === 'Enter') setAiMode(game, 'off'); overlay = null; }
+      else if (code === 'KeyK') { setAiMode(game, 'demo'); overlay = null; }
+      else if (code === 'KeyO') { setAiMode(game, 'guide'); overlay = null; }
       return;
     }
     if (overlay === 'pause' && code === 'KeyQ') {
@@ -3766,9 +4711,18 @@ function onKeyDown(e) {
   }
   const g = game;
   switch (code) {
-    case 'Escape': overlay = 'pause'; break;
-    case 'KeyH': overlay = 'help'; break;
-    case 'KeyI': overlay = 'stats'; break;
+    case 'Escape': overlay = 'pause'; return;
+    case 'KeyH': overlay = 'help'; return;
+    case 'KeyI': overlay = 'stats'; return;
+    case 'KeyK': setAiMode(g, g.ai.mode === 'demo' ? 'off' : 'demo'); return;
+    case 'KeyO': setAiMode(g, g.ai.mode === 'guide' ? 'off' : 'guide'); return;
+  }
+  if (g.ai.mode === 'demo') {
+    // The AI captain has the conn: the boat's controls are his until K is pressed.
+    if (g.realTime - (g.ai.blockedMsgT || -10) > 3) { say(g, 'THE AI CAPTAIN HAS THE CONN · PRESS K TO TAKE COMMAND', 'blue'); g.ai.blockedMsgT = g.realTime; }
+    return;
+  }
+  switch (code) {
     case 'KeyW': command(g, 'engineUp'); break;
     case 'KeyS': command(g, 'engineDown'); break;
     case 'KeyR': command(g, 'depthUp'); break;
@@ -3778,6 +4732,7 @@ function onKeyDown(e) {
     case 'ArrowUp': command(g, 'zoomIn'); break;
     case 'ArrowDown': command(g, 'zoomOut'); break;
     case 'KeyB': command(g, 'scopeToBow'); break;
+    case 'KeyV': command(g, 'steerToScope'); break;
     case 'KeyT': command(g, 'lock'); break;
     case 'Space': command(g, 'fire'); break;
     case 'Tab': command(g, 'ping'); break;
@@ -3790,6 +4745,17 @@ function onKeyDown(e) {
 
 function onKeyUp(e) {
   if (HOLD_KEYS[e.code]) input[HOLD_KEYS[e.code]] = false;
+}
+
+// Demo mode compresses time while nothing much is happening.
+function timeFactor(g) {
+  if (!g || g.ai.mode !== 'demo' || !g.ai.plan || g.state !== 'playing') return 1;
+  const ph = g.ai.plan.phase, th = g.ai.threats;
+  const quiet = !g.detected && !(th && (th.charge || th.torpedo || th.plane));
+  if (!quiet) return 1;
+  if (ph === 'approach' || ph === 'standby') return 4;
+  if (ph === 'evade' && !g.charges.length) return 3;
+  return 1;
 }
 
 /* ---------- main loop ---------- */
@@ -3812,11 +4778,12 @@ function render(dt) {
     drawCommandLine(c, LAYOUT.cmd);
   }
   c.restore();
+  if (performance.now() - uiToast < 1500) text(c, `TEXT SIZE ${Math.round(uiScale * 100)}%`, W / 2, H * 0.08, C.yellow, FS * 1.3, 'center');
   if (overlay === 'briefing' && game) drawBriefing(c, game);
   else if (overlay === 'help') drawHelp(c);
   else if (overlay === 'stats' && game) drawStats(c, game, `PATROL REPORT · PATROL ${game.patrol}`);
   else if (overlay === 'pause') drawPause(c);
-  if (mode === 'over' && game) drawStats(c, game, `U-BOOT LOST · ${game.lostReason}`, game.scoreRank >= 0 ? `NEW HIGH SCORE: #${game.scoreRank + 1}` : '');
+  if (mode === 'over' && game) drawStats(c, game, `U-BOOT LOST · ${game.lostReason}`, game.ai.used ? 'THE AI CAPTAIN COMMANDED: SCORE NOT RECORDED' : game.scoreRank >= 0 ? `NEW HIGH SCORE: #${game.scoreRank + 1}` : '');
 
   // present: phosphor glow, scanlines, flashes
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -3855,8 +4822,10 @@ function frame(now) {
   const dt = lastFrame ? Math.min(0.1, (now - lastFrame) / 1000) : 1 / 60;
   lastFrame = now;
   titleTime += dt;
+  if (overlay === 'briefing' && game && game.ai.mode === 'demo' && performance.now() - briefingT > 6000) overlay = null;
   if (game && (mode === 'play' || mode === 'over') && !overlay) {
-    step(game, dt, mode === 'play' ? input : {});
+    const k = timeFactor(game);
+    for (let i = 0; i < k; i++) step(game, dt, mode === 'play' && game.ai.mode !== 'demo' ? input : {});
     handleEvents(game);
     if (mode === 'play' && game.state === 'lost' && game.realTime - game.lostAt > 4) {
       saveScore(game);

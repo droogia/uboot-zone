@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.1. This manual explains every part of the control room, how the boat
+For game version v1.2. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -25,6 +25,8 @@ version; the in-game help (**H**) has the keys and a few reminders.
 15. [Patrols, score and difficulty](#15-patrols-score-and-difficulty)
 16. [Tactics](#16-tactics)
 17. [Quick reference](#17-quick-reference)
+18. [The AI captain and the first officer](#18-the-ai-captain-and-the-first-officer)
+19. [Screen and text size](#19-screen-and-text-size)
 
 A note on time: the game runs **four times faster than real time** so that an attack
 takes minutes, not hours. Speeds are given in real knots and the boat behaves in proportion,
@@ -97,7 +99,10 @@ instead (see below). Raising takes about a second, lowering a little less.
 
 **Training it.** **←** and **→** turn the periscope; hold **SHIFT** to turn it three times
 faster. It turns independently of the boat, so you can sail one way and look another.
-**B** brings it back to the bow.
+**B** brings it back to the bow. **V** does the opposite: it orders the helmsman to steer
+the boat onto the bearing the periscope is looking at. The periscope stays on that bearing
+while the bow swings round, and the auto helm then holds the new course (see the helm,
+section 4).
 
 **Magnification.** **↓** is low power (1.5×, 48° field of view), good for searching. **↑**
 is high power (6×, 12° field of view), good for identifying and aiming.
@@ -114,8 +119,9 @@ is high power (6×, 12° field of view), good for identifying and aiming.
 | Yellow brackets | The locked target and its name |
 | Yellow diamond **LEAD** | Where to aim to hit the locked target (EASY and NORMAL only) |
 | Red ship | An escort that has detected you |
-| White dotted line on the water | The track of one of your torpedoes |
-| Red dotted line on the water | The track of an enemy torpedo |
+| White dotted line on the water | The track of one of your torpedoes; close by you can see the torpedo itself, just under the surface |
+| Red dotted line on the water | The track of an enemy torpedo (the torpedo itself in red when close) |
+| Orange and yellow flames, grey smoke | A damaged, burning ship: it has been hit and will take another torpedo. Smoke drifts with the wind; steamers also trail funnel smoke |
 | Yellow beam at night | An escort's searchlight sweeping for you |
 | Cracks | Damage to the periscope glass from close explosions |
 
@@ -181,6 +187,9 @@ line the direction the periscope is looking. The readout is the heading in degre
 30°). Hold **A** or **D** to put the rudder over; let go and it returns to midships. The
 lower bar shows the **dive planes**: blue to the right when diving, green to the left when
 rising, with the vertical speed. The readout is the rate of turn in degrees per second.
+When the auto helm is steering (after **V**, or when the AI captain commands) the readout
+turns blue and shows **AUTO HELM** with the ordered course; it turns the boat smoothly onto
+that course and holds it. Touching **A** or **D** takes the wheel back.
 
 **Battery, air and hull bars (BATT, AIR, HULL).** Each bar turns yellow below 40% and red
 below 20%.
@@ -196,9 +205,13 @@ below 20%.
 
 ![The sonar scope after an active ping: ships, a torpedo, depth charges, a submarine and mines](docs/manual/sonar.png)
 
-The round scope shows a 6 km circle around the boat, **north up**. The rings are 1 km apart.
-The white line from the centre is your heading; the dotted yellow line is the periscope
-bearing, so you can turn the periscope onto a sonar contact.
+The round scope shows a 6 km circle around the boat, **north up**. The rings are 1 km apart,
+and the rim carries a bearing scale (every 5°, numbered every 30°). The white line from the
+centre and the white triangle outside the rim mark your heading; the dotted yellow line is
+the periscope bearing, so you can turn the periscope onto a sonar contact. Under the scope,
+**HDG** is your heading and **SCOPE** the periscope bearing in degrees; when the AI captain
+or the first officer is on, a dashed blue line and the blue **→** figure show the course
+they recommend.
 
 **Passive listening** is always on. The bright beam sweeps round once every three seconds;
 when it passes a sound source, a blip lights up and fades before the next sweep. Passive
@@ -228,7 +241,8 @@ roughly where you are. The sonar needs four seconds between pings.
 |---|---|
 | Green | Surface ship |
 | Blue | Submerged submarine |
-| Red | Torpedo |
+| Red torpedo shape | Enemy torpedo, pointing along its course |
+| White torpedo shape | One of your torpedoes |
 | Yellow | Depth charge |
 | Orange × | Mine |
 | Yellow ring | The locked target |
@@ -387,6 +401,15 @@ the **DETECTED** lamp blinks.
 | Hydrophones | 0.3 km + up to 3.2 km with your noise | Mostly deaf while the escort runs above 20 knots; 45% less below the thermocline |
 | ASDIC (active sonar) | 1.8 km, submerged boat only | 45% as far below the thermocline; much weaker while the escort runs above 22 knots |
 
+ASDIC has two weaknesses. It **loses a deep boat in the last stretch** before the escort runs
+over it (the deeper you are, the further out it goes blind), which is why the escorts drop
+their charges by estimate. And the **water churned up by exploding depth charges** blinds
+ASDIC and hydrophones for about 15 seconds around the explosions: the moment to sprint
+away.
+
+Convoy escorts cannot stray far: one that has chased you about 4.5 km from its place in the
+screen gives up and goes back to the convoy.
+
 You can hear their ASDIC: a lower, duller ping than yours. The **ASDIC** lamp blinks when one
 comes from within 2.5 km.
 
@@ -444,6 +467,8 @@ a moving ship, it arrives where the ship *was*. You must aim where the ship *wil
   and an alerted one zigzags more often and speeds up. Under 2 km is a good range.
 - Closer than 250 m, the torpedo has not armed yet and bounces off.
 - The TDC's numbers are estimates (except on EASY): a stale or rough solution misses.
+- The LEAD already allows for the curve the torpedo makes as it leaves the tube and turns
+  onto its gyro course, so it is right at large gyro angles too.
 
 **Difficulty and aiming:**
 
@@ -661,6 +686,12 @@ browser; they start after the first key press.
 - **Minefields:** ping from outside the field to see the mines and the gap in them, or
   cross deeper than 45 m.
 - **Mind the battery and the air** after a long chase: you need both to get home.
+- **When an escort comes close, go under the layer before it finds you,** and come back up
+  when it has passed. Above the layer its ASDIC builds contact inside about 1.4 km.
+- **After a pattern, run.** The churned water hides you for a few seconds: go to full speed
+  across the escort's track, change depth, then slow down and go silent again.
+- **Wait for a good angle on the bow.** A ship coming straight at you, or going away, is a
+  narrow target; let it turn its side to you (AOB 40° to 145°).
 
 ---
 
@@ -676,6 +707,7 @@ browser; they start after the first key press.
 | ← / → | Train the periscope (SHIFT = faster) |
 | ↑ / ↓ | Periscope high / low power |
 | B | Periscope to the bow |
+| V | Steer to the periscope bearing (auto helm) |
 | T | Lock / release the target in the crosshair |
 | SPACE | Fire the selected tube |
 | 1 - 5 | Select a tube (5 = stern) |
@@ -685,5 +717,57 @@ browser; they start after the first key press.
 | I | Patrol statistics |
 | M | Sound on / off |
 | G | CRT effects on / off |
+| K | AI captain takes / gives back command (demo) |
+| O | First officer's guidance on / off |
+| + / - | Text size |
 | ENTER | Accept the orders / start a new game |
 | ESC | Pause (then Q to abandon the patrol) |
+
+---
+
+## 18. The AI captain and the first officer
+
+![The AI captain evading a depth-charge attack, his reasoning in the blue box](docs/manual/ai-captain.png)
+
+Two crew members can help you learn the boat. Both are offered on the title screen, on
+every set of orders, and with a key at any time during a patrol.
+
+**The AI captain (K): demo mode.** The AI captain takes command and carries out the mission
+by himself, with the same commands you have. You watch: a blue box at the top of the
+periscope tells you what he is doing and why ("ESCORT CLOSING · UNDER THE LAYER UNTIL IT HAS
+PASSED", "ON THE LEAD · TUBE 2 · GYRO 047°"), the sonar shows his chosen course in blue,
+and the helm shows AUTO HELM. While he has the conn your keys for the boat do nothing;
+**K** again gives you command back at once, wherever you are. While nothing much is
+happening (the approach, the long wait below the layer) the demo runs time three or four
+times faster, shown as **TIME ×3** or **×4** in the box. In demo mode the orders of each
+new patrol are accepted after six seconds. A patrol in which the AI captain commanded is
+not entered in the high scores.
+
+What he does, roughly in order of priority:
+
+1. Aircraft about: crash dive to 60 m and stay there, below their charges.
+2. Torpedoes coming: go below 18 m.
+3. An escort has contact, or charges are falling: go below the layer, slow and silent; when
+   a pattern comes down, sprint out from under the escort's track and change depth.
+4. Battery or air low and nobody near: surface and recharge.
+5. Otherwise attack: a surface run on the diesels while the escorts are out of sight, then
+   periscope depth, a position ahead of the target and about 2 km off its track, slow and
+   silent; lock, wait for a broad angle on the bow, fire a fanned spread from about 2.4 km.
+   Escorts coming close send him under the layer until they have passed.
+
+He is a good captain, not a perfect one: on NORMAL and HARD he aims with the same inexact
+TDC data you get, so he misses too, and escorts sometimes hold on to him.
+
+![The first officer's next instruction: why, what, and which key](docs/manual/guide.png)
+
+**The first officer (O): guided mode.** You keep command; the first officer looks at the
+situation the same way the AI captain does and tells you **one thing to do next**, with the
+reason and the keys: for example *"▸ ORDER DEPTH 100 M · PRESS F ×3"*. When you have done
+it, a green tick confirms it and the next step appears. **O** again sends him away. Patrols
+sailed with guidance are recorded in the high scores marked GUIDED.
+
+## 19. Screen and text size
+
+The text and the panels grow with the window, so a 4K monitor gets 4K-sized lettering.
+**+** and **-** make all the text larger or smaller (60% to 250%); the setting is kept in
+the browser for next time.

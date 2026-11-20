@@ -543,3 +543,115 @@ test('sinking the submarine wins the duel', () => {
   assert.equal(g.patrolState, 'ending');
   assert.equal(g.stats.missionsWon, 1);
 });
+
+// ---------------------------------------------------------------- v1.2
+
+test('the torpedo model is whole segments and every ship got finer', () => {
+  assert.equal(L.TORPEDO_MODEL.length % 6, 0);
+  assert.ok(L.TORPEDO_MODEL.length / 6 > 40);
+  for (const k of ['freighter', 'tanker', 'destroyer', 'corvette']) assert.ok(L.MODELS[k].length / 6 > 500, k);
+});
+
+test('a large gyro angle still hits: the solution allows for the torpedo turning off the bow', () => {
+  for (const ang of [-70, -35, 35, 70]) {
+    const g = emptySea({ difficulty: 'easy', diffOverrides: { dudChance: 0 } });
+    g.player.speed = 0;
+    g.player.telegraph = L.TELEGRAPH_STOP;
+    const s = L.makeShip(g, 'freighter', Math.sin(ang * L.DEG) * 1800, Math.cos(ang * L.DEG) * 1800, L.wrap360(ang + 90), 0);
+    s.hp = s.maxHp = 1;
+    g.player.scopeBearing = ang;
+    L.command(g, 'lock');
+    assert.ok(L.fireTorpedo(g), `fired at ${ang}`);
+    run(g, 40);
+    assert.equal(g.stats.hits, 1, `hit at ${ang}°`);
+  }
+});
+
+test('auto helm: helm order turns the boat onto the course and holds it', () => {
+  const g = emptySea();
+  g.player.telegraph = 5;
+  run(g, 10);
+  L.command(g, 'helm', 120);
+  run(g, 70);
+  assert.ok(Math.abs(L.angleDiff(g.player.heading, 120)) < 2, `heading ${g.player.heading}`);
+  run(g, 1, { rudderLeft: true });
+  assert.equal(g.player.helmOrder, null, 'a hand on the wheel takes over');
+});
+
+test('V steers to the periscope bearing and the periscope stays on that bearing', () => {
+  const g = emptySea();
+  g.player.telegraph = 5;
+  run(g, 10);
+  g.player.scopeBearing = 60;
+  L.command(g, 'steerToScope');
+  assert.equal(Math.round(g.player.helmOrder), 60);
+  run(g, 20);
+  assert.ok(Math.abs(L.angleDiff(L.viewHeading(g), 60)) < 1, 'view held on 060 while turning');
+  assert.ok(g.player.scopeBearing < 55, 'relative bearing shrinks as the bow swings');
+});
+
+test('churned water after depth charges blinds the escort for a while', () => {
+  const g = emptySea();
+  g.player.depth = 60;
+  const s = L.makeShip(g, 'corvette', 0, 600, 180, 10);
+  const before = L.escortDetect(g, s, 600);
+  g.blast = { x: 0, y: 0, t: g.time };
+  assert.ok(L.escortDetect(g, s, 600) < before * 0.5);
+});
+
+test('convoy escorts give up a hunt beyond their leash', () => {
+  const g = L.createGame({ seed: 4, mission: 'convoy' });
+  const s = g.ships.find(x => x.role === 'escort');
+  s.ai.state = 'attack';
+  s.ai.hasContact = true;
+  s.ai.contact = 1.5;
+  s.ai.lastKnown = { x: s.x + 9000, y: s.y };
+  s.x += 8000;
+  run(g, 0.5);
+  assert.equal(s.ai.state, 'escort');
+});
+
+test('the AI captain carries out a submarine duel', () => {
+  const g = L.createGame({ seed: 2, mission: 'duel', ai: 'demo' });
+  for (let i = 0; i < 30 * 600 && g.patrolState === 'active' && g.state === 'playing'; i++) L.step(g, 1 / 30, {});
+  assert.ok(g.stats.missionsWon >= 1, 'duel won');
+  assert.ok(g.ai.used);
+});
+
+test('the AI captain escapes the hunters', () => {
+  const g = L.createGame({ seed: 2, mission: 'hunters', ai: 'demo' });
+  for (let i = 0; i < 30 * 400 && g.patrolState === 'active' && g.state === 'playing'; i++) L.step(g, 1 / 30, {});
+  assert.ok(g.stats.missionsWon >= 1);
+});
+
+test('the AI captain approaches a convoy and gets a torpedo away', () => {
+  const g = L.createGame({ seed: 4, mission: 'convoy', ai: 'demo' });
+  for (let i = 0; i < 30 * 500 && !g.stats.fired; i++) L.step(g, 1 / 30, {});
+  assert.ok(g.stats.fired > 0);
+  assert.ok(g.torpedoes.some(t => t.targetId), 'torpedoes are aimed at the locked target');
+});
+
+test('the first officer gives one instruction with its keys, and ticks it off when done', () => {
+  const g = L.createGame({ seed: 3, mission: 'convoy', ai: 'guide' });
+  g.player.depth = 120;
+  g.player.orderedDepth = 120;
+  run(g, 0.5);
+  const st = g.ai.step;
+  assert.ok(st && /DEPTH|SURFACE/.test(st.text), st && st.text);
+  assert.match(st.keys, /PRESS R/);
+  const want = Number(st.id.slice(5));
+  for (let i = 0; i < 12 && g.player.orderedDepth > want; i++) L.command(g, 'depthUp');
+  run(g, 0.5);
+  assert.notEqual(g.ai.step.id, st.id);
+  assert.ok(g.ai.done, 'done mark shown');
+});
+
+test('aircraft about: the planner never leaves the boat shallow', () => {
+  const g = L.createGame({ seed: 3, mission: 'convoy', ai: 'guide' });
+  L.spawnPlane(g);
+  const pl = g.planes[0];
+  pl.x = g.player.x + 3000; pl.y = g.player.y;
+  const plan = L.aiPlan(g);
+  assert.ok(plan.depth >= L.CRASH_DIVE_DEPTH);
+  assert.equal(plan.scopeUp, false);
+});

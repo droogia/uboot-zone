@@ -1,6 +1,6 @@
 {
   "name": "uboot-zone",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Single-file HTML5 vector arcade game: command a 1940 U-boat through its periscope, sonar and dials.",
   "private": true,
   "scripts": {

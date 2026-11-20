@@ -24,7 +24,7 @@ accelerates, turns and dives slowly.
 |---|---|
 | Periscope (about three quarters of the screen) | The sea with a bearing tape, a reticle with degree ticks, the locked target and the yellow LEAD marker. Below periscope depth it shows the water, the thermocline and any depth charge sinking towards you |
 | Bottom row | Depth gauge (yellow = ordered depth, blue = thermocline, red = danger), speed, engine telegraph, compass (yellow = periscope bearing), helm (rudder and dive planes), battery, air and hull |
-| Sonar | Round scope with the rotating beam, north up. White = own heading, dotted yellow = periscope bearing |
+| Sonar | Round scope with the rotating beam, north up, bearing scale on the rim. White = own heading, dotted yellow = periscope bearing, dashed blue = course recommended by the AI. Torpedoes show as small torpedo shapes along their course |
 | Tubes | Five lamps: green ready, yellow reloading, red empty. Gyro course, arc and depth checks |
 | Lamps | Surfaced, periscope, silent, detected, enemy ASDIC, diesel, below layer, crash dive, air, battery, hull and depth warnings, incoming torpedo, aircraft, mines, night |
 | Torpedo data computer | Locked target: name, tonnage, range, speed, course, angle on the bow, lead and run time |
@@ -32,6 +32,18 @@ accelerates, turns and dives slowly.
 | Bottom line | Summary of the commands |
 
 When the hull drops below 30% the whole panel switches to red emergency lighting.
+
+## Learning with the AI
+
+- **K: the AI captain (demo).** He commands the boat and carries out the mission with the
+  same controls you have, explaining each decision in a box at the top of the periscope.
+  Quiet stretches run three or four times faster. K again gives you the boat back. His
+  patrols do not enter the high scores.
+- **O: the first officer (guide).** You command; he tells you the next step, why, and which
+  keys to press, and ticks it off when you have done it.
+
+Both can be chosen on the title screen, on the orders of every patrol, or with the key at
+any time.
 
 ## Commands
 
@@ -45,6 +57,7 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
 | ← / → | Train the periscope; hold SHIFT to turn it faster |
 | ↑ / ↓ | Periscope high power (6×) / low power (1.5×) |
 | B | Periscope back to the bow |
+| V | Steer the boat onto the periscope bearing (auto helm holds the course; A/D take over) |
 | T | Lock / release the ship in the crosshair |
 | SPACE | Fire the selected tube |
 | 1 - 5 | Select a tube: 1-4 in the bow, 5 in the stern |
@@ -54,6 +67,9 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
 | I | Patrol statistics |
 | M | Sound on / off |
 | G | CRT effects (glow, phosphor persistence, scanlines) on / off |
+| K | AI captain takes / gives back command (demo mode) |
+| O | First officer's step-by-step guidance on / off |
+| + / - | Text size (the text also scales with the window, up to 4K) |
 | ENTER | Accept the orders at the start of a patrol |
 | ESC | Pause (Q in the pause screen abandons the patrol) |
 
@@ -68,7 +84,8 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
 4. Train the periscope on the yellow **LEAD** marker and press **SPACE**. On EASY the
    gyro takes the solution automatically.
 5. Get away from the escorts: go deep, slow down, run silent, hide below the
-   thermocline.
+   thermocline. Right after a depth-charge pattern the churned water blinds them for a few
+   seconds: that is the moment to sprint away.
 
 When a mission ends, the boat is resupplied (torpedoes, a hull patch) and the next orders
 arrive.
@@ -98,7 +115,9 @@ at random, and convoys and escorts grow with every patrol.
   too.
 - Escorts find you by sight (surfaced or periscope up), by hydrophone (your noise:
   speed, diesels, crash dives, launches, pings) and by ASDIC. Below the thermocline
-  (90 m) ASDIC is much weaker. An escort that has you is drawn in red.
+  (90 m) ASDIC is much weaker; it also loses a deep boat just before the escort runs over
+  it, and exploding charges blind it for a while. Convoy escorts give up a chase about
+  4.5 km from the convoy. An escort that has you is drawn in red.
 - Depth charges sink at about 3 m/s and explode at the depth the escort guessed.
 - Below 220 m the hull starts to give; at 280 m it collapses.
 - Sonar colours: green = ship, blue = submarine, red = torpedo, yellow = depth charge,
@@ -143,9 +162,12 @@ browser's local storage.
 1. **Logic** (no DOM): constants, wireframe models, game state, missions and conditions,
    commands, the simulation (boat, convoy, escort and submarine AI, aircraft, torpedoes,
    depth charges, mines, sonar). `step(game, realDt, input)` advances the game.
-2. **UI WIRING**: canvas rendering (periscope projection, instruments, overlays), the
-   glow/scanline effects, WebAudio sounds (all synthesized), keyboard input and the
-   main loop.
+   The AI captain and the first officer live here too: one planner (`aiPlan`) decides
+   what the boat should be doing; `aiApply` carries it out with the player's commands and
+   `guideStep` turns it into the next instruction.
+2. **UI WIRING**: canvas rendering (periscope projection, instruments, overlays, flames and
+   smoke), the glow/scanline effects, WebAudio sounds (all synthesized), keyboard input and
+   the main loop.
 
 Ship models are lists of 3D segments built from a hull generator plus boxes, funnels
 and masts, so adding a ship class means adding a `build...()` function, an entry in
@@ -162,7 +184,8 @@ npm test
 
 The tests load the logic straight from `uboot-zone.html` and check the boat dynamics,
 torpedoes and firing solutions, depth charges, detection, sonar, missions, conditions,
-enemy submarines, aircraft and mines; they also
+enemy submarines, aircraft and mines, the auto helm, the gyro-angle correction, and the AI
+captain (who must win a duel and escape the hunters) and the first officer; they also
 drive the real page in jsdom (with a stub canvas) through the title screen, orders, keys,
 overlays, game over and high scores.
 

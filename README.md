@@ -33,6 +33,14 @@ accelerates, turns and dives slowly.
 
 When the hull drops below 30% the whole panel switches to red emergency lighting.
 
+## Collisions
+
+Every vessel has a hitbox (length × beam, turned to its heading) and a depth range: at
+periscope depth a merchant passing overhead hits your conning tower, at 30 m she passes
+clear. A collision damages both vessels, by closing speed and weight; ramming can sink a
+ship (and counts for you), and being rammed by an escort can sink you. Enemy ships keep clear
+of each other, but not of a submerged U-boat they cannot see.
+
 ## Deck gun, chart, sounds
 
 - **Deck gun (E).** Surfaced, not in a storm, after about 8 s for the crew to clear it

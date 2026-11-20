@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.9. This manual explains every part of the control room, how the boat
+For game version v2.0. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -33,6 +33,7 @@ version; the in-game help (**H**) has the keys and a few reminders.
 23. [What you hear](#23-what-you-hear)
 24. [Date, place, sky, underwater light, sea life and the CRT effects](#24-date-place-sky-underwater-light-sea-life-and-the-crt-effects)
 25. [Progress in the address bar](#25-progress-in-the-address-bar)
+26. [Collisions](#26-collisions)
 
 A note on time: the game runs **four times faster than real time** so that an attack
 takes minutes, not hours. Speeds are given in real knots and the boat behaves in proportion,
@@ -931,3 +932,27 @@ an address, the title screen shows the best score and the patrols completed, and
 continues the career at the next patrol (with its date, five weeks or so later). Patrols in
 which the AI captain commanded do not count. The high-score table (stats screen) is kept in
 the browser as before.
+
+## 26. Collisions
+
+Every vessel has a simple hitbox: a rectangle as long and as wide as the ship, turned to its
+heading, and a depth range. Two vessels collide when their rectangles overlap **and** their
+depths overlap:
+
+| Vessel | Depth range |
+|---|---|
+| Your U-boat | from 9 m above its depth (the conning tower) to 2 m below |
+| Cargo steamer, tanker | down to their keel: 7.5 and 8.5 m |
+| Corvette, destroyer | 4.5 and 3.3 m |
+| T-class submarine | like yours |
+
+So at periscope depth (13 m) a merchant passing overhead hits your conning tower; at 30 m
+she passes clear. **Both vessels are damaged**: the faster you closed and the heavier the
+other vessel, the worse. Bumping into a stopped freighter at a few knots costs a good part
+of your hull; being rammed by an escort at full speed can sink you. A ship can be sunk by a
+collision too, and if you rammed her she counts as yours. After a collision both vessels lose
+way and are pushed apart; the escort involved knows exactly where you are.
+
+Enemy ships keep clear of each other (they turn to starboard when they would pass too close),
+but they do not see a submerged U-boat, so they will not avoid you. The AI captain and the
+first officer go down to 30 m when a ship is about to pass overhead.

@@ -805,3 +805,58 @@ test('continuing a career starts at a later patrol', () => {
   const g = L.createGame({ seed: 3, firstPatrol: 4 });
   assert.equal(g.patrol, 4);
 });
+
+// ---------------------------------------------------------------- v1.10
+
+function collisionSea(depth) {
+  const g = emptySea();
+  const p = g.player;
+  p.heading = 90; p.speed = 0; p.telegraph = L.TELEGRAPH_STOP;
+  p.depth = depth; p.orderedDepth = depth;
+  return g;
+}
+
+test('a ship running into the surfaced boat damages both and pushes them apart', () => {
+  const g = collisionSea(0);
+  const s = L.makeShip(g, 'freighter', 0, -300, 0, 8);
+  s.targetSpeed = 8;
+  s.grt = 5000;
+  const hp0 = s.hp;
+  for (let i = 0; i < 30 * 30 && g.player.hull === 100; i++) L.step(g, 1 / 30, {});
+  assert.ok(g.player.hull < 100, 'our hull damaged');
+  assert.ok(s.hp < hp0, 'the ship damaged too');
+  assert.ok(g.messages.some(m => /COLLISION WITH/.test(m.text)));
+  assert.equal(L.obbOverlap(
+    { x: g.player.x, y: g.player.y, heading: g.player.heading, length: L.SUB.length, beam: L.SUB.beam },
+    { x: s.x, y: s.y, heading: s.heading, length: s.length, beam: s.beam }), null, 'pushed apart');
+});
+
+test('deep enough, a ship passes overhead; at periscope depth it hits the conning tower', () => {
+  for (const [depth, hits] of [[40, false], [L.PERISCOPE_DEPTH, true]]) {
+    const g = collisionSea(depth);
+    const s = L.makeShip(g, 'freighter', 0, -300, 0, 8);
+    s.targetSpeed = 8;
+    run(g, 60);
+    assert.equal(g.player.hull < 100, hits, `depth ${depth}`);
+  }
+});
+
+test('a ship we ram and sink counts for us', () => {
+  const g = collisionSea(0);
+  const s = L.makeShip(g, 'corvette', 0, -200, 0, 16);
+  s.targetSpeed = 16;
+  s.hp = 0.05;
+  for (let i = 0; i < 30 * 30 && !s.sinking; i++) L.step(g, 1 / 30, {});
+  assert.ok(s.sinking);
+  assert.equal(g.stats.sunk.corvette, 1);
+});
+
+test('enemy ships keep clear of each other', () => {
+  const g = emptySea();
+  g.player.depth = 60;
+  const a = L.makeShip(g, 'freighter', 0, 0, 90, 8), b = L.makeShip(g, 'freighter', 1500, 0, 270, 8);
+  a.targetSpeed = 8; b.targetSpeed = 8;
+  const damaged = () => a.hp < a.maxHp || b.hp < b.maxHp;
+  for (let i = 0; i < 30 * 60 && !damaged(); i++) L.step(g, 1 / 30, {});
+  assert.ok(!damaged(), 'head-on merchants turned to starboard and passed');
+});

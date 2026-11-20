@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.8. This manual explains every part of the control room, how the boat
+For game version v1.9. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -314,7 +314,7 @@ it. The TDC then shows:
 | AOB | Angle on the bow: how the target shows its side to you, with S or P for starboard or port |
 | LEAD | Course to fire on, and the lead angle relative to the target's bearing |
 | RUN | How long the torpedo will take to get there, in seconds |
-| SOLUTION OK / STALE | STALE means the target has not been observed for a while: look at it again |
+| SOLUTION OK / STALE · OBSERVE / NO SOLUTION / AUTO GYRO | On the right of the TDC's title line. STALE means the target has not been observed for a while: look at it again. NO SOLUTION: the torpedo cannot catch it. AUTO GYRO (EASY): the gyro is set for you |
 
 The TDC only learns from what the periscope sees. When the periscope is down or the target
 out of sight, it keeps working on the last observation and the solution goes stale.

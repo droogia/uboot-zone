@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.8';
+const VERSION = '001.9';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -4766,9 +4766,9 @@ function drawRight(c, g, r) {
   const fixed = lh * 2.2 + FS * 3                                        // title, bearings, HDG/SCOPE line
     + lh * 3.7 + Math.min(tw0 * 0.56, FS * 1.6) + FS * 2                  // tubes, gyro, deck gun
     + lh * 0.9 + 4 * (FS * 1.45 + 4)                                      // lamps
-    + lh * 1.7 + lh * 4.6                                                 // torpedo data computer, at its fullest
+    + lh * 0.65 + lh * 0.85 + lh * 0.82 * 3 + lh * 0.55                  // torpedo data computer, at its fullest
     + lh * 5.2 + lh * 0.4;                                                // mission, date and clock, and a gap
-  const sr = clamp((r.h - fixed) / 2, FS * 2.2, Math.min(r.w / 2 - pad - FS * 1.6, r.h * 0.19));
+  const sr = clamp((r.h - fixed) / 2, FS * 2.2, Math.min(r.w / 2 - pad - FS * 1.6, r.h * 0.24));
   y += lh * 0.6;
   drawSonar(c, g, r.x + r.w / 2, y + sr + FS * 1.5, sr);
   y += sr * 2 + FS * 3;
@@ -4856,41 +4856,43 @@ function drawRight(c, g, r) {
   });
   y += 4 * (lhh + 4) + lh * 0.5;
 
-  // torpedo data computer
+  // torpedo data computer: the solution's state on the title line, the data in four tight rows
   c.beginPath(); line(c, r.x + pad, y, r.x + r.w - pad, y); stroke(c, C[INK], LW, 0.3);
-  y += lh * 0.7;
+  y += lh * 0.65;
   text(c, 'TORPEDO DATA COMPUTER', r.x + pad, y, C[INK], FS * 0.85);
-  y += lh;
   const lock = p.lock;
   const s = lock && g.ships.find(x => x.id === lock.id);
-  const fs = FS * 0.78;
+  const fs = FS * 0.78, row = lh * 0.82;
+  const sol = s && lock.obs ? firingSolution(g) : null;
+  if (s && lock.obs) {
+    const st = !sol ? ['NO SOLUTION', C.red] : sol.stale ? ['STALE · OBSERVE', C.yellow] : [g.diff.autoSolution ? 'AUTO GYRO' : 'SOLUTION OK', C[INK]];
+    c.font = font(FS * 0.85, true);
+    const room = r.w - pad * 3 - c.measureText('TORPEDO DATA COMPUTER').width;
+    c.font = font(fs, true);
+    const sw = c.measureText(st[0]).width;
+    text(c, st[0], r.x + r.w - pad, y, st[1], sw > room ? fs * room / sw : fs, 'right');
+  }
+  y += lh * 0.85;
   if (!s || !lock.obs) {
     text(c, 'NO TARGET · AIM AND PRESS T', r.x + pad, y, rgba(INK, 0.5), fs);
-    y += lh * 3;
   } else {
-    const o = lock.obs, sol = firingSolution(g);
+    const o = lock.obs;
     const unit = s.role === 'escort' ? 'T' : 'GRT';
+    const col2 = r.x + r.w / 2 + pad * 0.5;
     text(c, `${s.name.toUpperCase()}`, r.x + pad, y, C.yellow, fs);
     text(c, `${fmtInt(s.grt)} ${unit}`, r.x + r.w - pad, y, C.yellow, fs, 'right');
-    y += lh * 0.9;
-    const aobSide = o.aob >= 0 ? 'S' : 'P';
-    const col2 = r.x + r.w / 2 + pad * 0.5;
+    y += row;
     text(c, `RANGE ${fmtInt(o.range)} M`, r.x + pad, y, C[INK], fs);
     text(c, `SPEED ${o.speed.toFixed(1)} KN`, col2, y, C[INK], fs);
-    y += lh * 0.9;
+    y += row;
     text(c, `COURSE ${pad3(o.course)}°`, r.x + pad, y, C[INK], fs);
-    text(c, `AOB ${Math.round(Math.abs(o.aob))}° ${aobSide}`, col2, y, C[INK], fs);
-    y += lh * 0.9;
+    text(c, `AOB ${Math.round(Math.abs(o.aob))}° ${o.aob >= 0 ? 'S' : 'P'}`, col2, y, C[INK], fs);
+    y += row;
     if (sol) {
       const lead = angleDiff(sol.course, bearingTo(p.x, p.y, s.x, s.y));
       text(c, g.diff.leadMarker ? `LEAD ${pad3(sol.course)}° (${lead >= 0 ? '+' : ''}${lead.toFixed(0)}°)` : 'LEAD --- (HARD)', r.x + pad, y, C[INK], fs);
       text(c, `RUN ${Math.round(sol.time / TIME_SCALE)} S`, col2, y, C[INK], fs);
-      y += lh * 0.9;
-      text(c, sol.stale ? 'SOLUTION STALE · OBSERVE AGAIN' : g.diff.autoSolution ? 'SOLUTION OK · AUTO GYRO' : 'SOLUTION OK', r.x + pad, y, sol.stale ? C.yellow : C[INK], fs);
-    } else {
-      text(c, 'NO SOLUTION', r.x + pad, y, C.red, fs);
     }
-    y += lh;
   }
 
   // score

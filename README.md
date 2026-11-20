@@ -47,10 +47,20 @@ When the hull drops below 30% the whole panel switches to red emergency lighting
   depth-charge pistols before a close blast, the hull groaning in silent running, the deck
   gun.
 
-## Clock and sea life
+## Date, place, sky, clock
 
-A small analog clock at the bottom right shows the time of day on the patrol, with the sun or
-the moon on its face.
+Every patrol has a date (from March 1941) and a real place in the Atlantic, shown in the orders
+and in the panel. The sun and the moon are where they would be at that date, time and place,
+and the moon shows its phase. A split-flap calendar and an analog clock (ship's time) sit at
+the bottom right.
+
+## Progress in the address bar
+
+The best score and the highest patrol completed are saved in the address
+(`#best=12345&patrol=3`). Bookmark it to keep your progress; on the title screen **C**
+continues at the next patrol.
+
+## Sea life
 
 
 Schools of fish below periscope depth (they scatter from the hull) and pods of dolphins

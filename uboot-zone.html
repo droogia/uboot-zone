@@ -28,7 +28,7 @@
    World: x = east, y = north, h = up (metres). Bearings in degrees,
    0 = north, clockwise. Depth is positive downwards.
    ========================================================= */
-const VERSION = '001.6';
+const VERSION = '001.7';
 const TIME_SCALE = 4;               // arcade time: game seconds per real second
 const KN = 0.5144;                  // metres per second in one knot
 const DEG = Math.PI / 180;
@@ -695,6 +695,7 @@ function createGame(opts = {}) {
   const diffName = opts.difficulty && DIFFICULTY[opts.difficulty] ? opts.difficulty : 'normal';
   const g = {
     rng,
+    seed,
     difficulty: diffName,
     diff: Object.assign({}, DIFFICULTY[diffName], opts.diffOverrides || {}),
     state: 'playing',               // 'playing' | 'lost'
@@ -755,7 +756,9 @@ function createGame(opts = {}) {
     warn: { torpedo: false, aircraft: false, mines: false },
     detected: false,
     blast: null,                    // last depth-charge explosion: the churned water blinds the escorts
-    asdicNear: 0,                   // real time of the last enemy ping heard close by
+    asdicNear: -10,                 // real time of the last enemy ping heard
+    asdicPings: [],                 // recent enemy pings: real time, bearing, distance
+    asdicMsgT: -100,
     sonar: { sweep: 0, blips: [], ping: null, pingReady: 0 },
     patrol: 0,
     patrolState: 'active',
@@ -771,6 +774,7 @@ function createGame(opts = {}) {
     },
   };
   g.ai = aiInit(opts.ai);
+  if (opts.firstPatrol > 1) g.patrol = Math.floor(opts.firstPatrol) - 1;   // continue a career from a later patrol
   if (!opts.noPatrol) startPatrol(g, opts.mission);
   return g;
 }
@@ -860,6 +864,7 @@ function startPatrol(g, type) {
   g.mines = [];
   g.torpedoes = [];
   g.sonar.blips = [];
+  g.asdicPings = [];
   g.detected = false;
   g.convoy = null;
   g.area = null;
@@ -878,9 +883,8 @@ function startPatrol(g, type) {
   const b = rng() * 360;
   const spawn = { convoy: spawnConvoy, duel: spawnDuel, hunters: spawnHunters, anchorage: spawnAnchorage }[type];
   const intel = spawn(g, n, b);
-  // The patrol's clock: a time of day that fits the conditions, varied from patrol to patrol.
-  const t0 = g.cond.time === 'day' ? 8 * 60 + (n * 47) % 300 : g.cond.time === 'dusk' ? 18 * 60 + 10 + (n * 13) % 40 : 22 * 60 + (n * 29) % 240;
-  g.clock = { start: t0, at: g.time };
+  // Date, place and the patrol's clock: a time of day at which the sun fits the conditions.
+  g.clock = { start: planCalendar(g, n, type), at: g.time };
   // What U-boat command told us goes on the chart.
   if (type === 'convoy') g.plot.intel = { x: g.convoy.x, y: g.convoy.y, r: 1500, label: 'CONVOY REPORTED', course: g.convoy.course };
   else if (type === 'hunters') {
@@ -892,6 +896,8 @@ function startPatrol(g, type) {
   g.patrolState = 'active';
   g.briefing = {
     title: `PATROL ${n} · ${g.mission.name}`,
+    when: `${dateText(g.calendar.day, true)} · ${hhmm(g.clock.start)} SHIP'S TIME`,
+    where: `${g.calendar.place} · ${latLonText(g.calendar.lat, g.calendar.lon)}`,
     orders: intel.orders,
     intel: intel.intel,
     conditions: conditionsText(g.cond),
@@ -1572,8 +1578,15 @@ function stepEscort(g, s, dt) {
   if (ai.pingT <= 0) {
     ai.pingT = ai.state === 'escort' ? g.rng.range(8, 14) : g.rng.range(4, 6);
     if (p.alive && d < 4000 && p.depth > SURFACED_DEPTH) {
-      emit(g, 'enemyPing', { dist: d });
-      if (d < 2500) g.asdicNear = g.realTime;
+      const brg = bearingTo(p.x, p.y, s.x, s.y);
+      emit(g, 'enemyPing', { dist: d, brg });
+      g.asdicNear = g.realTime;
+      g.asdicPings.push({ t: g.realTime, brg, d });
+      if (g.asdicPings.length > 8) g.asdicPings.shift();
+      if (g.realTime - g.asdicMsgT > 30) {
+        g.asdicMsgT = g.realTime;
+        say(g, `ASDIC PINGS BEARING ${brg3(brg)}°${d < 2000 ? ' · CLOSE' : ''} · AN ESCORT IS SEARCHING`, 'yellow');
+      }
     }
   }
 
@@ -2325,6 +2338,108 @@ function updateSonar(g, dt) {
     emit(g, 'detected');
   }
 }
+
+/* =========================================================
+   CALENDAR, PLACE AND SKY
+   Each patrol has a date and a place; the sun and the moon are where they
+   would be there and then (simple almanac formulas, good to a degree or so).
+   ========================================================= */
+const OCEAN_AREAS = [
+  { name: 'WESTERN APPROACHES', lat: 55.5, lon: -15.5 },
+  { name: 'ROCKALL BANK', lat: 57.6, lon: -13.8 },
+  { name: 'NORTH CHANNEL APPROACHES', lat: 56.2, lon: -9.6 },
+  { name: 'SOUTH OF ICELAND', lat: 61.2, lon: -20.5 },
+  { name: 'GREENLAND GAP', lat: 57.8, lon: -34.5 },
+  { name: 'GRAND BANKS', lat: 45.8, lon: -48.5 },
+  { name: 'BAY OF BISCAY', lat: 46.2, lon: -8.5 },
+  { name: 'WEST OF THE AZORES', lat: 38.6, lon: -31.5 },
+  { name: 'OFF FREETOWN', lat: 7.8, lon: -15.6 },
+];
+const HARBOURS = [
+  { name: 'LOCH EWE', lat: 57.85, lon: -5.65 },
+  { name: 'SCAPA FLOW', lat: 58.90, lon: -3.10 },
+  { name: 'HVALFJORDUR, ICELAND', lat: 64.38, lon: -21.60 },
+  { name: 'FREETOWN ROADS', lat: 8.50, lon: -13.25 },
+];
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+const MONTH_NAMES = ['JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE', 'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'];
+const CAMPAIGN_START = Date.UTC(1941, 2, 3);          // the first patrol sails in early March 1941
+const DAY_MS = 86400000;
+
+const latLonText = (lat, lon) => {
+  const f = (v, p, n) => { const a = Math.abs(v), d = Math.floor(a), m = Math.round((a - d) * 60); return `${d}°${String(m).padStart(2, '0')}'${v >= 0 ? p : n}`; };
+  return `${f(lat, 'N', 'S')} ${f(lon, 'E', 'W')}`;
+};
+
+// Days since J2000.0 (2000-01-01 12:00 UTC).
+const j2000 = ms => (ms - Date.UTC(2000, 0, 1, 12)) / DAY_MS;
+const rev = a => ((a % 360) + 360) % 360;
+
+// Right ascension and declination (degrees) of the sun and the moon, and the moon's phase.
+function sunMoon(ms) {
+  const d = j2000(ms), eps = 23.439 * DEG;
+  const gS = rev(357.529 + 0.98560028 * d) * DEG;
+  const lamS = rev(280.459 + 0.98564736 * d + 1.915 * Math.sin(gS) + 0.020 * Math.sin(2 * gS));
+  const L = rev(218.316 + 13.176396 * d), M = rev(134.963 + 13.064993 * d) * DEG, F = rev(93.272 + 13.229350 * d) * DEG;
+  const lamM = rev(L + 6.289 * Math.sin(M)), betM = 5.128 * Math.sin(F);
+  const eq = (lam, bet) => {
+    const l = lam * DEG, b = bet * DEG;
+    const ra = Math.atan2(Math.sin(l) * Math.cos(eps) - Math.tan(b) * Math.sin(eps), Math.cos(l));
+    const dec = Math.asin(Math.sin(b) * Math.cos(eps) + Math.cos(b) * Math.sin(eps) * Math.sin(l));
+    return { ra: rev(ra / DEG), dec: dec / DEG };
+  };
+  const elong = rev(lamM - lamS);
+  return { sun: eq(lamS, 0), moon: eq(lamM, betM), frac: (1 - Math.cos(elong * DEG)) / 2, waxing: elong < 180 };
+}
+
+// Altitude and azimuth (degrees, azimuth from north through east) of a body seen from lat/lon.
+function horizontal(ms, lat, lon, body) {
+  const lst = rev(280.46061837 + 360.98564736629 * j2000(ms) + lon);
+  const H = (lst - body.ra) * DEG, phi = lat * DEG, dec = body.dec * DEG;
+  const alt = Math.asin(Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H));
+  const az = Math.atan2(-Math.sin(H) * Math.cos(dec), Math.cos(phi) * Math.sin(dec) - Math.sin(phi) * Math.cos(dec) * Math.cos(H));
+  return { alt: alt / DEG, az: rev(az / DEG) };
+}
+
+// Ship's time is local mean time; this gives the UTC instant for minute m of the patrol's day.
+const patrolInstant = (g, m) => g.calendar.day + (m - (g.calendar.lon / 15) * 60) * 60000;
+
+function skyNow(g) {
+  if (!g.calendar) return null;
+  const ms = patrolInstant(g, (g.clock.start + (g.time - g.clock.at) / 60));
+  const sm = sunMoon(ms), { lat, lon } = g.calendar;
+  return { sun: horizontal(ms, lat, lon, sm.sun), moon: horizontal(ms, lat, lon, sm.moon), frac: sm.frac, waxing: sm.waxing, ms };
+}
+
+// Date, place and starting time of patrol n. A separate random stream keeps the game's sequence unchanged.
+function planCalendar(g, n, type) {
+  const r = makeRng((g.seed || 1) * 7919 + n * 104729);
+  const dayN = Math.round((n - 1) * 34 + r.range(0, 12));
+  const day = CAMPAIGN_START + dayN * DAY_MS;
+  const place = type === 'anchorage' ? r.pick(HARBOURS) : r.pick(OCEAN_AREAS);
+  const lat = place.lat + (type === 'anchorage' ? 0 : r.range(-1.2, 1.2)), lon = place.lon + (type === 'anchorage' ? 0 : r.range(-1.5, 1.5));
+  g.calendar = { day, lat, lon, place: place.name };
+  // Pick a time of day at which the sun matches the conditions: high by day, low in the west at dusk, well down at night.
+  const want = g.cond.time;
+  const sunAt = m => { const ms = patrolInstant(g, m); return horizontal(ms, lat, lon, sunMoon(ms).sun); };
+  const fits = [];
+  let lowest = { m: 0, alt: 99 };
+  for (let m = 0; m < 1440; m += 10) {
+    const s = sunAt(m);
+    if (s.alt < lowest.alt) lowest = { m, alt: s.alt };
+    if (want === 'day' && s.alt > 15) fits.push(m);
+    else if (want === 'dusk' && s.alt > -5 && s.alt < 3 && s.az > 180) fits.push(m);
+    else if (want === 'night' && s.alt < -12) fits.push(m);
+  }
+  // At high latitude in summer the night may never get dark enough: take the darkest hour.
+  return fits.length ? r.pick(fits) : lowest.m;
+}
+
+function dateText(ms, long) {
+  const d = new Date(ms);
+  return long ? `${d.getUTCDate()} ${MONTH_NAMES[d.getUTCMonth()]} ${d.getUTCFullYear()}` : `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+const hhmm = m => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
 
 /* =========================================================
    DECK GUN (88 mm) AND THE PLOT (what the chart shows)
@@ -3117,7 +3232,8 @@ function seg3(c, cam, ax, ay, ah, bx, by, bh, seaClip) {
 
 const TV = [0, 0, 0];
 let g_sea = null;                                   // sea state of the game being drawn (ships roll more in a storm)
-let g_now = 0;                                      // animation clock (real seconds) for flames, smoke, propellers
+let g_now = 0;
+let g_sky = null;                                   // sun and moon of the game being drawn (null on the title screen)                                      // animation clock (real seconds) for flames, smoke, propellers
 const WIND = { to: 70, speed: 5 };                  // smoke drifts towards bearing 070
 const SMOKE_COLOR = '#b9c9b0';
 function drawShipModel(c, cam, s, color, alpha, width) {
@@ -3322,6 +3438,22 @@ function dirToScreen(cam, b, e) {
   return [cam.cx + Math.tan(rb * DEG) * cam.F, cam.cy - Math.tan(e * DEG) * cam.F / Math.cos(rb * DEG)];
 }
 
+// The moon with its phase: a faint full disc, the lit limb and the terminator.
+function drawMoonDisc(c, x, y, R, frac, waxing, alpha) {
+  c.beginPath();
+  c.arc(x, y, R, 0, TAU);
+  stroke(c, C.white, LW, alpha * 0.25);
+  if (frac < 0.02) return;                                   // new moon: only the faint disc
+  const side = waxing ? 1 : -1;                               // lit on the right when waxing (northern sky)
+  const tx = R * Math.abs(1 - 2 * frac);                      // half-width of the terminator ellipse
+  c.beginPath();
+  c.ellipse(x, y, R, R, 0, -Math.PI / 2, Math.PI / 2, side < 0);
+  // terminator: bulges towards the lit limb for a crescent, away from it past half
+  const toLit = frac < 0.5;
+  c.ellipse(x, y, Math.max(0.5, tx), R, 0, Math.PI / 2, -Math.PI / 2, side > 0 ? toLit : !toLit);
+  stroke(c, C.white, LW * 1.2, alpha);
+}
+
 function drawSky(c, cam, t, cond) {
   const starShare = cond.time === 'night' ? 1 : cond.time === 'dusk' ? 0.3 : 0;
   if (starShare && !cond.fog) {
@@ -3337,18 +3469,32 @@ function drawSky(c, cam, t, cond) {
     c.fillStyle = rgba('white', 0.7);
     c.fill();
   }
-  if (cond.time === 'night') {
-    const pt = dirToScreen(cam, BG.moon.b, BG.moon.e);
-    if (pt) {
-      const [mx, my] = pt, mr = Math.tan(BG.moon.r * DEG) * cam.F;
-      c.beginPath();
-      c.arc(mx, my, mr, 0, TAU);
-      c.moveTo(mx + mr * 0.15, my - mr * 0.97);
-      c.arc(mx - mr * 0.35, my, mr * 0.95, -1.4, 1.4, false);
-      c.moveTo(mx - mr * 0.3 + mr * 0.12, my - mr * 0.35);
-      c.arc(mx - mr * 0.3, my - mr * 0.35, mr * 0.12, 0, TAU);
-      stroke(c, C.white, LW, cond.fog ? 0.3 : 0.85);
+  const sky = g_sky;
+  if (sky) {
+    // the sun and the moon where the almanac puts them for this date, time and place
+    const sun = sky.sun, moon = sky.moon;
+    if (moon.alt > -1) {
+      const pt = dirToScreen(cam, moon.az, moon.alt);
+      if (pt) drawMoonDisc(c, pt[0], pt[1], Math.tan(0.9 * DEG) * cam.F, sky.frac, sky.waxing, (cond.fog ? 0.3 : 0.9) * (sun.alt > 0 ? 0.45 : 1));
     }
+    if (sun.alt > -1.2) {
+      const pt = dirToScreen(cam, sun.az, sun.alt);
+      if (pt) {
+        const [sx, sy] = pt, sr = Math.tan(1.1 * DEG) * cam.F, low = sun.alt < 6;
+        c.beginPath();
+        c.arc(sx, sy, sr, 0, TAU);
+        if (!low) {
+          for (let i = 0; i < 12; i++) {
+            const a = (i / 12) * TAU + t * 0.05;
+            line(c, sx + Math.cos(a) * sr * 1.4, sy + Math.sin(a) * sr * 1.4, sx + Math.cos(a) * sr * 2.1, sy + Math.sin(a) * sr * 2.1);
+          }
+        }
+        stroke(c, low ? C.orange : C.yellow, LW * 1.2, cond.fog ? 0.3 : 0.85);
+      }
+    }
+  } else if (cond.time === 'night') {
+    const pt = dirToScreen(cam, BG.moon.b, BG.moon.e);
+    if (pt) drawMoonDisc(c, pt[0], pt[1], Math.tan(BG.moon.r * DEG) * cam.F, 0.3, true, cond.fog ? 0.3 : 0.85);
   } else {
     const dusk = cond.time === 'dusk';
     const pt = dirToScreen(cam, dusk ? 262 : 205, dusk ? 2.2 : 16);
@@ -3414,6 +3560,7 @@ function drawSea(c, g, r, cam) {
   const cond = g.cond;
   g_sea = cond;
   g_now = g.realTime;
+  g_sky = skyNow(g);
   drawSky(c, cam, t, cond);
 
   // coastline silhouettes on the horizon: a far range, the near range and its ridges
@@ -3527,8 +3674,9 @@ function drawSea(c, g, r, cam) {
     stroke(c, C.white, LW, 0.4 * (cond.time === 'night' ? 0.5 : 1));
   }
   // moonlight glitter on the water under the moon
-  if (cond.time === 'night' && !cond.fog) {
-    const a = angleDiff(BG.moon.b, cam.yawDeg);
+  const moonUp = g_sky ? g_sky.moon.alt > 1 && g_sky.sun.alt < -4 && g_sky.frac > 0.15 : cond.time === 'night';
+  if (moonUp && !cond.fog) {
+    const a = angleDiff(g_sky ? g_sky.moon.az : BG.moon.b, cam.yawDeg);
     if (Math.abs(a) < cam.fov / 2 + 5) {
       const mx = cam.cx + Math.tan(a * DEG) * cam.F;
       c.beginPath();
@@ -3862,7 +4010,8 @@ function drawUnderwater(c, g, r, cam) {
     }
     stroke(c, C.blue, LW * 1.4, 0.8 * k);
     const cond = g.cond;
-    if (cond.time !== 'night') {
+    const sky = skyNow(g);
+    if (sky ? sky.sun.alt > -2 : cond.time !== 'night') {
       // caustics: the shimmering net of light just under the waves
       c.beginPath();
       for (let i = 0; i < 70; i++) {
@@ -3875,7 +4024,7 @@ function drawUnderwater(c, g, r, cam) {
       }
       stroke(c, C.blue, LW, 0.22 * k * (cond.time === 'dusk' ? 0.5 : 1));
       // shafts of sunlight: fixed bearings, leaning away from the sun, fading with depth
-      const sunAz = cond.time === 'dusk' ? 262 : 205;
+      const sunAz = sky ? sky.sun.az : cond.time === 'dusk' ? 262 : 205;
       const lean = Math.sin(angleDiff(sunAz, cam.yawDeg) * DEG) * -0.45;
       const len = r.h * (0.35 + 0.35 * k);
       for (let i = 0; i < 36; i++) {
@@ -4517,6 +4666,20 @@ function drawSonar(c, g, cx, cy, R) {
   c.setLineDash([2, 5]);
   stroke(c, C.yellow, LW, 0.6);
   c.setLineDash([]);
+  // enemy ASDIC pings: a flash on the rim at the escort's bearing, a ray that fades
+  for (const pg of g.asdicPings) {
+    const age = g.realTime - pg.t;
+    if (age > 3) continue;
+    const a = (pg.brg - 90) * DEG, k = 1 - age / 3;
+    c.beginPath();
+    c.arc(cx, cy, R * (1.02 + age * 0.04), a - 0.12, a + 0.12);
+    stroke(c, C.yellow, LW * 2.2, k);
+    c.beginPath();
+    line(c, cx + Math.cos(a) * R * 0.55, cy + Math.sin(a) * R * 0.55, cx + Math.cos(a) * R, cy + Math.sin(a) * R);
+    c.setLineDash([3, 4]);
+    stroke(c, C.yellow, LW, k * 0.8);
+    c.setLineDash([]);
+  }
   // course recommended by the AI captain / first officer
   if (g.ai.mode !== 'off' && g.ai.plan && g.ai.plan.heading !== null) {
     const rh = (g.ai.plan.heading - 90) * DEG;
@@ -4662,7 +4825,7 @@ function drawRight(c, g, r) {
     ['PERISCOPE', scopeAvailable(g), 'green'],
     ['SILENT', p.silent, 'blue'],
     ['DETECTED', g.detected, 'red', true],
-    ['ASDIC', g.realTime - g.asdicNear < 1.2, 'yellow', true],
+    ['ASDIC', g.realTime - g.asdicNear < 3.5, 'yellow', true],
     ['DIESEL', p.depth <= SURFACED_DEPTH && p.alive, 'yellow'],
     ['BELOW LAYER', p.depth > THERMOCLINE, 'blue'],
     ['CRASH DIVE', p.crashDive, 'red', true],
@@ -4721,18 +4884,69 @@ function drawRight(c, g, r) {
 
   // score
   const sy = r.y + r.h - lh * 1.1;
-  c.beginPath(); line(c, r.x + pad, sy - lh * 2.9, r.x + r.w - pad, sy - lh * 2.9); stroke(c, C[INK], LW, 0.3);
+  c.beginPath(); line(c, r.x + pad, sy - lh * 4.1, r.x + r.w - pad, sy - lh * 4.1); stroke(c, C[INK], LW, 0.3);
+  // right: the flap calendar over the clock
   const cR = lh * 1.2, ccx = r.x + r.w - pad - cR, ccy = sy - lh * 1.25;
-  const fitText = (str, yy, color, size) => {
+  const calW = drawFlapCalendar(c, g, r.x + r.w - pad, sy - lh * 3.85, lh * 1.15);
+  const fitText = (str, yy, color, size, reserve) => {
     c.font = font(size, true);
-    const w = c.measureText(str).width, max = r.w - pad * 3 - cR * 2;
+    const w = c.measureText(str).width, max = r.w - pad * 3 - reserve;
     text(c, str, r.x + pad, yy, color, w > max ? size * max / w : size);
   };
-  fitText(`PATROL ${g.patrol} · ${g.mission.name}`, sy - lh * 2.1, C[INK], FS * 0.85);
-  fitText(missionStatus(g), sy - lh * 1.05, C.yellow, FS * 0.8);
-  fitText(conditionsText(g.cond), sy, rgba(INK, 0.75), FS * 0.72);
+  fitText(`PATROL ${g.patrol} · ${g.mission.name}`, sy - lh * 3.3, C[INK], FS * 0.85, calW);
+  if (g.calendar) fitText(`${g.calendar.place} · ${latLonText(g.calendar.lat, g.calendar.lon)}`, sy - lh * 2.25, rgba(INK, 0.8), FS * 0.72, calW);
+  fitText(missionStatus(g), sy - lh * 1.1, C.yellow, FS * 0.8, cR * 2);
+  fitText(conditionsText(g.cond), sy, rgba(INK, 0.75), FS * 0.72, cR * 2 + FS * 4);
   text(c, `${fmtInt(score(g))}`, ccx - cR - pad * 0.7, sy, C.yellow, FS, 'right');
   drawClock(c, g, ccx, ccy, cR);
+}
+
+// Split-flap calendar: day, month, year on three flaps, right-aligned at x. Returns its width.
+let flapShown = '', flapT = -10, flapOld = '';
+function drawFlapCalendar(c, g, xr, y, h) {
+  if (!g.calendar) return 0;
+  const d = new Date(g.calendar.day + Math.floor(clockMinutes(g) < g.clock.start ? 1 : 0) * DAY_MS);
+  const parts = [String(d.getUTCDate()).padStart(2, '0'), MONTHS[d.getUTCMonth()], String(d.getUTCFullYear())];
+  const key = parts.join(' ');
+  const now = performance.now() / 1000;
+  if (key !== flapShown) { flapOld = flapShown; flapShown = key; flapT = now; }
+  const old = flapOld ? flapOld.split(' ') : parts;
+  const p = clamp((now - flapT) / 0.45, 0, 1);              // flip progress
+  const fs = h * 0.62, gap = h * 0.18;
+  c.font = font(fs, true);
+  const widths = parts.map(t => c.measureText(t.length < 4 ? t.padEnd(t.length) : t).width + fs * 0.7);
+  const total = widths.reduce((a, b) => a + b, 0) + gap * (parts.length - 1);
+  let x = xr - total;
+  parts.forEach((t, i) => {
+    const w = widths[i], mid = y + h / 2;
+    c.fillStyle = 'rgba(0,0,0,0.6)';
+    c.fillRect(x, y, w, h);
+    c.beginPath();
+    c.rect(x, y, w, h);
+    stroke(c, C[INK], LW, 0.7);
+    text(c, t, x + w / 2, mid + fs * 0.05, C.white, fs, 'center');
+    if (p < 1 && old[i] !== t) {
+      // the old leaf falls: its upper half folds down over the new value
+      const k = 1 - p;
+      c.save();
+      c.beginPath(); c.rect(x, y, w, h / 2); c.clip();
+      c.fillStyle = '#000';
+      c.fillRect(x, mid - (h / 2) * k, w, (h / 2) * k);
+      c.translate(x + w / 2, mid);
+      c.scale(1, k);
+      text(c, old[i], 0, fs * 0.05, C.white, fs, 'center');
+      c.restore();
+    }
+    // the split between the leaves
+    c.beginPath();
+    line(c, x, mid, x + w, mid);
+    stroke(c, '#000', LW, 0.85);
+    c.beginPath();
+    line(c, x - 1, mid, x + 2, mid); line(c, x + w - 2, mid, x + w + 1, mid);
+    stroke(c, C[INK], LW, 0.7);
+    x += w + gap;
+  });
+  return total;
 }
 
 // Small analog clock with the sun or the moon on its face.
@@ -5003,6 +5217,7 @@ function statsLines(g) {
     ['TIME SUBMERGED', `${Math.floor(sub / 60)} H ${String(sub % 60).padStart(2, '0')} MIN (GAME TIME)`],
     ['ACTIVE PINGS', `${st.pings}`],
     ['PATROLS', `${g.patrol} STARTED · ${st.missionsWon} MISSIONS ACCOMPLISHED`],
+    ['DATE · AREA', g.calendar ? `${dateText(g.calendar.day)} · ${g.calendar.place} · ${latLonText(g.calendar.lat, g.calendar.lon)}` : '-'],
     ['DIFFICULTY', g.diff.name + (g.ai.used ? ' · AI CAPTAIN (NOT RECORDED)' : g.ai.guided ? ' · GUIDED' : '')],
   ];
 }
@@ -5043,7 +5258,11 @@ function drawBriefing(c, g) {
   const fs = Math.min(ph / 28, pw / 60, FS * 1.1);
   text(c, 'ORDERS FROM U-BOAT COMMAND', r.x + r.w / 2, r.y + fs * 2, rgba(INK, 0.7), fs * 0.9, 'center');
   text(c, b.title, r.x + r.w / 2, r.y + fs * 3.7, C.yellow, fs * 1.4, 'center');
-  let y = r.y + fs * 6;
+  if (b.when) {
+    text(c, b.when, r.x + r.w / 2, r.y + fs * 5.2, C.white, fs * 0.85, 'center');
+    text(c, b.where, r.x + r.w / 2, r.y + fs * 6.4, rgba(INK, 0.85), fs * 0.85, 'center');
+  }
+  let y = r.y + fs * (b.when ? 8.2 : 6);
   const x = r.x + fs * 2, w = r.w - fs * 4;
   const block = (label, str, color) => {
     text(c, label, x, y, C.yellow, fs * 0.85);
@@ -5283,11 +5502,18 @@ function drawTitle(c, t) {
   }
   stroke(c, C.green, LW, 0.6);
   g_sea = null;
+  g_sky = null;
   g_now = t;
   drawShipModel(c, cam, TITLE_SHIP, C.green, 1, LW * 1.5);
   const ts = clamp(W / 12, 32, 120);
   text(c, 'U-BOOT ZONE', cx, H * 0.17, C.green, ts, 'center');
   text(c, `v${VERSION}`, cx, H * 0.17 + ts * 0.75, rgba('green', 0.7), FS, 'center');
+  if (urlProgress.best || urlProgress.patrol) {
+    const yy = H * 0.17 + ts * 0.75 + FS * 1.9;
+    text(c, `BEST ${fmtInt(urlProgress.best)}  ·  PATROLS COMPLETED: ${urlProgress.patrol}`, cx, yy, C.yellow, FS, 'center');
+    if (urlProgress.patrol > 0) text(c, `C: CONTINUE AT PATROL ${urlProgress.patrol + 1}`, cx, yy + FS * 1.5, C.yellow, FS * 0.9, 'center');
+    text(c, 'YOUR PROGRESS IS IN THE ADDRESS BAR: BOOKMARK THE PAGE TO KEEP IT', cx, yy + FS * 2.9, rgba('green', 0.55), FS * 0.75, 'center');
+  }
   const y = H * 0.74;
   text(c, 'SELECT DIFFICULTY', cx, y, rgba('green', 0.8), FS * 1.1, 'center');
   const opts = [['1', 'easy'], ['2', 'normal'], ['3', 'hard']];
@@ -5412,7 +5638,7 @@ function handleEvents(g) {
       case 'aircraft': Sound.alarm(); break;
       case 'planeAttack': break;
       case 'planeDrop': Sound.splash(clamp(1 - e.dist / 2000, 0.1, 0.6)); break;
-      case 'patrolEnd': break;
+      case 'patrolEnd': if (e.won) urlRecord(g, true); break;
       case 'destroyed':
         Sound.boom(1, true);
         Sound.breakup(1);
@@ -5773,6 +5999,27 @@ const Sound = {
   },
 };
 
+/* ---------- progress in the URL ----------
+   The best score and the highest patrol completed live in the address (#best=…&patrol=…), so a
+   bookmark or a shared link keeps them. The AI captain's patrols do not count. */
+function urlRead() {
+  try {
+    const q = new URLSearchParams(window.location.hash.slice(1));
+    return { best: Math.max(0, parseInt(q.get('best'), 10) || 0), patrol: clamp(parseInt(q.get('patrol'), 10) || 0, 0, 999) };
+  } catch (e) { return { best: 0, patrol: 0 }; }
+}
+let urlProgress = urlRead();
+function urlRecord(g, patrolWon) {
+  if (g.ai.used) return;
+  let changed = false;
+  const sc = score(g);
+  if (sc > urlProgress.best) { urlProgress.best = sc; changed = true; }
+  if (patrolWon && g.patrol > urlProgress.patrol) { urlProgress.patrol = g.patrol; changed = true; }
+  if (!changed) return;
+  try { window.history.replaceState(null, '', `#best=${urlProgress.best}&patrol=${urlProgress.patrol}`); } catch (e) { /* not available */ }
+}
+window.addEventListener('hashchange', () => { urlProgress = urlRead(); });
+
 /* ---------- high scores ---------- */
 const SCORE_KEY = 'uboot-zone.scores';
 function loadScores() {
@@ -5785,6 +6032,7 @@ function loadScores() {
 }
 
 function saveScore(g) {
+  urlRecord(g, false);
   if (g.ai.used) { g.scoreRank = -1; return; }      // the AI captain's patrols do not count
   const list = loadScores();
   const entry = { score: score(g), grt: g.stats.tonnage, patrol: g.patrol, diff: g.diff.name + (g.ai.guided ? ' GUIDED' : ''), date: new Date().toISOString().slice(0, 10), id: Date.now() };
@@ -5800,8 +6048,8 @@ function saveScore(g) {
 const HOLD_KEYS = { KeyA: 'rudderLeft', KeyD: 'rudderRight', ArrowLeft: 'scopeLeft', ArrowRight: 'scopeRight', ShiftLeft: 'scopeFast', ShiftRight: 'scopeFast' };
 const GAME_KEYS = new Set(['Space', 'Tab', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
-function newGame(ai) {
-  game = createGame({ difficulty: titleDifficulty, ai: ai || 'off' });
+function newGame(ai, firstPatrol) {
+  game = createGame({ difficulty: titleDifficulty, ai: ai || 'off', firstPatrol });
   mode = 'play';
   overlay = null;
   FX.shakes = [];
@@ -5828,6 +6076,7 @@ function onKeyDown(e) {
     else if (code === 'Digit3') titleDifficulty = 'hard';
     else if (code === 'KeyH') overlay = 'help';
     else if (code === 'Enter' || code === 'Space') newGame();
+    else if (code === 'KeyC' && urlProgress.patrol > 0) newGame(null, urlProgress.patrol + 1);
     else if (code === 'KeyK') newGame('demo');
     else if (code === 'KeyO') newGame('guide');
     return;

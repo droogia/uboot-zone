@@ -759,3 +759,49 @@ test('cracks in the glass are jagged polylines with branches', () => {
   assert.ok(g.player.cracks.length >= 2, 'main line and at least one branch');
   assert.ok(g.player.cracks[0].length >= 15);
 });
+
+// ---------------------------------------------------------------- v1.7
+
+test('the almanac: sun and moon agree with known events', () => {
+  let ms = Date.UTC(2024, 3, 8, 18, 42);                 // total eclipse over Dallas
+  let sm = L.sunMoon(ms);
+  const sun = L.horizontal(ms, 32.78, -96.8, sm.sun), moon = L.horizontal(ms, 32.78, -96.8, sm.moon);
+  assert.ok(Math.abs(sun.alt - moon.alt) < 2 && Math.abs(sun.az - moon.az) < 3);
+  assert.ok(sm.frac < 0.02, 'new moon');
+  ms = Date.UTC(2024, 3, 23, 23, 49);
+  assert.ok(L.sunMoon(ms).frac > 0.98, 'full moon');
+  ms = Date.UTC(2024, 5, 21, 12, 0);                      // June solstice, noon at Greenwich
+  const s2 = L.horizontal(ms, 51.48, 0, L.sunMoon(ms).sun);
+  assert.ok(Math.abs(s2.alt - 62) < 1.5 && Math.abs(s2.az - 180) < 3);
+});
+
+test('every patrol has a date and a place, and its time of day fits the conditions', () => {
+  const g = L.createGame({ seed: 11 });
+  let last = -Infinity;                                   // 1941 is before 1970: the timestamps are negative
+  for (let n = 1; n <= 8; n++) {
+    if (n > 1) L.startPatrol(g);
+    assert.ok(g.calendar.day > last, 'dates move forward');
+    last = g.calendar.day;
+    assert.ok(g.calendar.place && g.briefing.when && g.briefing.where);
+    const sky = L.skyNow(g);
+    if (g.cond.time === 'day') assert.ok(sky.sun.alt > 10, `day: sun ${sky.sun.alt}`);
+    if (g.cond.time === 'dusk') assert.ok(sky.sun.alt > -7 && sky.sun.alt < 5, `dusk: sun ${sky.sun.alt}`);
+    if (g.cond.time === 'night') assert.ok(sky.sun.alt < 0, `night: sun ${sky.sun.alt}`);
+  }
+});
+
+test('enemy ASDIC pings are shown, not only heard', () => {
+  const g = emptySea();
+  g.player.depth = 30;
+  const s = L.makeShip(g, 'corvette', 0, 3500, 180, 8);
+  s.ai.pingT = 0;
+  run(g, 0.5);
+  assert.ok(g.asdicPings.length > 0);
+  assert.ok(Math.abs(L.angleDiff(g.asdicPings[0].brg, 0)) < 5);
+  assert.ok(g.messages.some(m => /ASDIC PINGS BEARING/.test(m.text)));
+});
+
+test('continuing a career starts at a later patrol', () => {
+  const g = L.createGame({ seed: 3, firstPatrol: 4 });
+  assert.equal(g.patrol, 4);
+});

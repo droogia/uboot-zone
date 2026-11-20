@@ -30,13 +30,13 @@ test.afterEach(() => {
   openWindows.clear();
 });
 
-function openApp() {
+function openApp(opts = {}) {
   const texts = [];
   const errors = [];
   const dom = new JSDOM(readHtml(), {
     runScripts: 'dangerously',
     pretendToBeVisual: true,
-    url: 'http://localhost/',
+    url: 'http://localhost/' + (opts.hash || ''),
     beforeParse(window) {
       window.HTMLCanvasElement.prototype.getContext = () => stubContext(texts);
       window.addEventListener('error', e => errors.push(e.message));
@@ -281,5 +281,20 @@ test('G steps the CRT effects through FULL, MEDIUM, LOW and OFF', async () => {
   const seen = [];
   for (let i = 0; i < 4; i++) { app.press('KeyG'); await app.frames(1); seen.push(app.peek('effectsLevel')); }
   assert.deepEqual(seen, [2, 1, 0, 3]);
+  assert.deepEqual(app.errors, []);
+});
+
+test('progress in the address: read on the title, C continues, a won patrol updates it', async () => {
+  const app = openApp({ hash: '#best=12345&patrol=3' });
+  await app.frames(2);
+  assert.deepEqual(JSON.parse(JSON.stringify(app.peek('urlProgress'))), { best: 12345, patrol: 3 });
+  assert.ok(app.texts.some(t => /PATROLS COMPLETED: 3/.test(t)));
+  app.press('KeyC');
+  await app.frames(2);
+  const g = app.peek('game');
+  assert.equal(g.patrol, 4);
+  g.stats.tonnage = 20000;
+  app.peek('urlRecord')(g, true);
+  assert.match(app.window.location.hash, /best=\d+&patrol=4/);
   assert.deepEqual(app.errors, []);
 });

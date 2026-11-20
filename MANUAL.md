@@ -1,6 +1,6 @@
 # U-Boot Zone · Commander's Manual
 
-For game version v1.6. This manual explains every part of the control room, how the boat
+For game version v1.7. This manual explains every part of the control room, how the boat
 and its enemies behave, and how to fight a patrol. The [README](README.md) has the short
 version; the in-game help (**H**) has the keys and a few reminders.
 
@@ -31,7 +31,8 @@ version; the in-game help (**H**) has the keys and a few reminders.
 21. [The deck gun](#21-the-deck-gun)
 22. [The chart](#22-the-chart)
 23. [What you hear](#23-what-you-hear)
-24. [Clock, underwater light, sea life and the CRT effects](#24-clock-underwater-light-sea-life-and-the-crt-effects)
+24. [Date, place, sky, underwater light, sea life and the CRT effects](#24-date-place-sky-underwater-light-sea-life-and-the-crt-effects)
+25. [Progress in the address bar](#25-progress-in-the-address-bar)
 
 A note on time: the game runs **four times faster than real time** so that an attack
 takes minutes, not hours. Speeds are given in real knots and the boat behaves in proportion,
@@ -79,7 +80,7 @@ water the boat runs on its battery and breathes the air it took down with it.
 | 12 | Torpedo tubes | [6](#6-torpedo-tubes-and-the-torpedo-data-computer) |
 | 13 | Status lamps | [7](#7-status-lamps) |
 | 14 | Torpedo data computer | [6](#6-torpedo-tubes-and-the-torpedo-data-computer) |
-| 15 | Mission, orders status, conditions, score and the clock | [13](#13-missions), [15](#15-patrols-score-and-difficulty) |
+| 15 | Mission, area and position, orders status, conditions, score, the date and the clock | [13](#13-missions), [15](#15-patrols-score-and-difficulty) |
 | 16 | Command summary | [17](#17-quick-reference) |
 
 Everything you need to know about the boat is on these instruments: there is no separate
@@ -413,6 +414,11 @@ the **DETECTED** lamp blinks.
 | Lookouts, periscope up | 0.9 km + 0.12 km per knot | Halved in a storm (spray hides the periscope) |
 | Hydrophones | 0.3 km + up to 3.2 km with your noise | Mostly deaf while the escort runs above 20 knots; 45% less below the thermocline |
 | ASDIC (active sonar) | 1.8 km, submerged boat only | 45% as far below the thermocline; much weaker while the escort runs above 22 knots |
+
+When an escort pings within 4 km you hear it through the hull, and you also see it: the
+**ASDIC** lamp lights for a few seconds, a yellow flash and a dotted ray on the sonar rim show
+the bearing of the escort that pinged, and the crew reports *"ASDIC PINGS BEARING 057°"*
+(at most every 30 seconds).
 
 ASDIC has two weaknesses. It **loses a deep boat in the last stretch** before the escort runs
 over it (the deeper you are, the further out it goes blind), which is why the escorts drop
@@ -870,12 +876,25 @@ charges, torpedoes, aircraft), v1.4 adds:
   drip, more often the deeper you are.
 - **The deck gun**: crack, thump and an echo across the water; a dull boom for each hit.
 
-## 24. Clock, underwater light, sea life and the CRT effects
+## 24. Date, place, sky, underwater light, sea life and the CRT effects
 
-**The clock.** At the bottom right of the panel, a small analog clock shows the time of day
-on the patrol, with the sun, the setting sun or the moon on its face. Each patrol starts at a
-time that fits its conditions (morning to early afternoon by day, early evening at dusk,
-late at night) and the clock runs with game time: one game minute every 15 seconds.
+**Date, place and clock.** Every patrol has a date and a place. The career begins in early
+March 1941 and each patrol is about five weeks after the last. The places are real: open-ocean
+areas (Western Approaches, Rockall Bank, south of Iceland, the Greenland gap, the Grand Banks,
+Biscay, the Azores, off Freetown) and, for the anchorage raids, Loch Ewe, Scapa Flow,
+Hvalfjordur and Freetown roads. The orders give the date, the ship's time and the position;
+the panel shows the area and position under the patrol's name. At the bottom right, a
+split-flap calendar shows the date (its leaves flip when it changes), and below it an analog
+clock shows ship's time (local time) with the sun, the setting sun or the moon on its face.
+The clock runs with game time: one game minute every 15 seconds.
+
+**The sky.** The sun and the moon are where they would really be on that date, at that time
+and in that place, and the moon shows its real phase. Each patrol starts at a time of day
+that fits its conditions: the sun high by day, low in the west at dusk, well below the horizon
+at night (in high summer at high latitudes it never gets fully dark: you get the darkest hour).
+By day the sun is usually above the periscope's field of view; train the periscope on its
+bearing at dawn or dusk to see it. The moonlight glitter on the water is under the moon, and
+only when the moon is up; the underwater light shafts lean away from the sun.
 
 **Under water.** Just below periscope depth you look up at the underside of the waves. Their
 ripples are fixed to the compass, so they turn with the periscope. By day the surface throws
@@ -898,3 +917,17 @@ shows them best. Neither has any effect on the game.
 
 On a slow machine the game switches them off by itself after a few seconds of low frame rate;
 G turns them back on.
+
+## 25. Progress in the address bar
+
+The game keeps your **best score** and the **highest patrol you have completed** in the page
+address, after a `#`:
+
+    uboot-zone.html#best=12345&patrol=3
+
+It is updated every time you complete a patrol and when a game ends. Bookmark the page (or
+copy the link) to keep your progress, or send it to someone. When the page opens with such
+an address, the title screen shows the best score and the patrols completed, and **C**
+continues the career at the next patrol (with its date, five weeks or so later). Patrols in
+which the AI captain commanded do not count. The high-score table (stats screen) is kept in
+the browser as before.
